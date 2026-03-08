@@ -13,21 +13,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var doctorCmd = &cobra.Command{
-	Use:   "doctor",
-	Short: "Health check — diagnose common issues",
-	Long: `Checks:
+func DoctorCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Health check — diagnose common issues",
+		Long: `Checks:
   - ~/.scuta/bin/ exists and is in PATH
   - All installed binaries are executable
   - State file is valid
   - GitHub authentication is configured
   - Registry is reachable`,
-	RunE: runDoctor,
+		RunE: runDoctor,
+	}
+
+	return cmd
 }
 
 //nolint:gochecknoinits // Standard Cobra pattern
 func init() {
-	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(DoctorCmd())
 }
 
 func runDoctor(_ *cobra.Command, _ []string) error {

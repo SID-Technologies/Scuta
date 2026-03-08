@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -9,23 +10,28 @@ import (
 	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
+	"github.com/sid-technologies/scuta/lib/prompt"
 
 	"github.com/spf13/cobra"
 )
 
-var initCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Setup Scuta on a new machine",
-	Long: `Creates ~/.scuta/ directory structure, detects GitHub authentication
+func InitCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Setup Scuta on a new machine",
+		Long: `Creates ~/.scuta/ directory structure, detects GitHub authentication
 (gh CLI or token), adds ~/.scuta/bin/ to PATH, and prints next steps.
 
 Idempotent — safe to run multiple times.`,
-	RunE: runInit,
+		RunE: runInit,
+	}
+
+	return cmd
 }
 
 //nolint:gochecknoinits // Standard Cobra pattern
 func init() {
-	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(InitCmd())
 }
 
 func runInit(_ *cobra.Command, _ []string) error {
@@ -38,14 +44,17 @@ func runInit(_ *cobra.Command, _ []string) error {
 	}
 	output.Success("Created %s", scutaDir)
 
-	// 2. Write default config if it doesn't exist
+	// 2. Configure registry and write config
 	configPath := scutaDir + "/config.yaml"
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		cfg := config.DefaultConfig()
+		cfg, err := promptInitialConfig()
+		if err != nil {
+			return err
+		}
 		if err := config.Save(scutaDir, cfg); err != nil {
 			return err
 		}
-		output.Success("Created default config")
+		output.Success("Created config")
 	} else {
 		output.Success("Config already exists")
 	}
@@ -130,4 +139,63 @@ func printPathInstructions(binDir string, shell string) {
 		fmt.Printf("  export PATH=\"%s:$PATH\"\n", binDir)
 	}
 	fmt.Println()
+}
+
+// promptInitialConfig runs an interactive setup to build the initial config.
+func promptInitialConfig() (config.Config, error) {
+	cfg := config.DefaultConfig()
+	reader := prompt.NewReader(bufio.NewReader(os.Stdin))
+
+	mode, err := reader.Select("Registry mode", []prompt.Option{
+		{
+			Key:         "public",
+			Label:       "Public (default)",
+			Description: "Use the official SID registry — no auth needed",
+		},
+		{
+			Key:         "private",
+			Label:       "Private",
+			Description: "Use a private GitHub-hosted registry (requires token)",
+		},
+		{
+			Key:         "local",
+			Label:       "Local only",
+			Description: "No remote registry — manage tools manually via 'scuta registry add'",
+		},
+	}, "public")
+	if err != nil {
+		return cfg, err
+	}
+
+	switch mode {
+	case "private":
+		url, err := reader.Ask("Registry URL", "")
+		if err != nil {
+			return cfg, err
+		}
+		if url != "" {
+			cfg.RegistryURL = url
+		}
+
+		token, err := reader.Ask("GitHub token (or set SCUTA_GITHUB_TOKEN later)", "")
+		if err != nil {
+			return cfg, err
+		}
+		if token != "" {
+			cfg.GithubToken = token
+		}
+	case "local":
+		// Set a sentinel so the remote fetch is skipped
+		cfg.RegistryURL = "local"
+	default:
+		// "public" uses defaults — no config changes needed
+	}
+
+	interval, err := reader.Ask("Update check interval", cfg.UpdateInterval)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.UpdateInterval = interval
+
+	return cfg, nil
 }

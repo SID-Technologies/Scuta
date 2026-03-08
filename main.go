@@ -1,10 +1,10 @@
 package main
 
 import (
-	_ "embed"
-
 	"github.com/sid-technologies/scuta/cmd"
 	"github.com/sid-technologies/scuta/lib/registry"
+
+	_ "embed"
 )
 
 //go:embed registry.yaml

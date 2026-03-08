@@ -11,7 +11,7 @@ var listCmd = &cobra.Command{
 	Short: "Show all tools with install status",
 	Long: `Displays all tools from the registry with their current install status,
 installed version, and latest available version.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		output.Warning("scuta list is not yet implemented")
 	},
 }

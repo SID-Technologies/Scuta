@@ -12,7 +12,7 @@ var updateCmd = &cobra.Command{
 	Long: `With no arguments, updates ALL installed tools AND scuta itself.
 With a tool name, updates only that tool.`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		output.Warning("scuta update is not yet implemented")
 	},
 }

@@ -10,7 +10,7 @@ import (
 )
 
 // Quote wraps a string in POSIX-compliant single quotes, escaping any
-// embedded single quotes using the '\'' idiom.
+// embedded single quotes using the '\” idiom.
 func Quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

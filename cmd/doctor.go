@@ -15,7 +15,7 @@ var doctorCmd = &cobra.Command{
   - State file is valid
   - GitHub authentication is configured
   - Registry is reachable`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		output.Warning("scuta doctor is not yet implemented")
 	},
 }

@@ -13,7 +13,7 @@ var initCmd = &cobra.Command{
 (gh CLI or token), adds ~/.scuta/bin/ to PATH, and prints next steps.
 
 Idempotent — safe to run multiple times.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		output.Warning("scuta init is not yet implemented")
 	},
 }

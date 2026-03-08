@@ -12,7 +12,7 @@ var installCmd = &cobra.Command{
 	Long: `Downloads the correct binary for your OS/architecture from the tool's
 GitHub Releases, verifies checksum, and places it in ~/.scuta/bin/.`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		output.Warning("scuta install is not yet implemented")
 	},
 }

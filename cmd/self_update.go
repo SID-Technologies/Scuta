@@ -11,7 +11,7 @@ var selfUpdateCmd = &cobra.Command{
 	Short: "Update Scuta itself",
 	Long: `Downloads the latest Scuta release and replaces the current binary.
 If installed via Homebrew, prints guidance to use brew upgrade instead.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		output.Warning("scuta self-update is not yet implemented")
 	},
 }

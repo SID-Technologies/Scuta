@@ -12,7 +12,7 @@ var uninstallCmd = &cobra.Command{
 	Long: `Removes the tool binary from ~/.scuta/bin/ and clears its state entry.
 Does not affect Homebrew-installed versions of the same tool.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		output.Warning("scuta uninstall is not yet implemented")
 	},
 }

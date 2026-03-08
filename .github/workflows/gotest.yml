@@ -1,0 +1,25 @@
+name: Go Tests
+
+on:
+  workflow_call:
+
+jobs:
+  gotest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - name: Install dependencies
+        run: go mod tidy
+      - name: Run tests with coverage
+        run: go test -timeout=5m -race -tags=verify_logs -coverprofile=coverage.out ./...
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.out
+          fail_ci_if_error: false
+          verbose: true

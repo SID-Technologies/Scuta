@@ -1,0 +1,11 @@
+tools:
+  api-gen:
+    description: "OpenAPI code generator (Go + TypeScript)"
+    repo: sid-technologies/api-gen
+  pilum:
+    description: "Multi-cloud deployment CLI"
+    repo: sid-technologies/Pilum
+    homebrew: sid-technologies/tap/pilum
+  mcp-gen:
+    description: "Generate MCP servers from OpenAPI specs"
+    repo: sid-technologies/mcp-gen

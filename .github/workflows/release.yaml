@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0, 0.2.0)'
+        required: true
+        type: string
+      bump:
+        description: 'Or auto-bump from latest tag'
+        required: false
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
+
+            if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+              echo "Error: Version must be semantic versioning format (e.g., 0.1.0, 1.2.3-beta.1)"
+              echo "You entered: ${{ inputs.version }}"
+              exit 1
+            fi
+          elif [ "${{ inputs.bump }}" != "none" ] && [ -n "${{ inputs.bump }}" ]; then
+            LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            LATEST=${LATEST#v}
+
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST"
+
+            case "${{ inputs.bump }}" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              patch) PATCH=$((PATCH + 1)) ;;
+            esac
+
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          else
+            echo "Error: Either version or bump must be specified"
+            exit 1
+          fi
+
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Releasing version: v${VERSION}"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.VERSION }}" -m "Release v${{ steps.version.outputs.VERSION }}"
+          git push origin "v${{ steps.version.outputs.VERSION }}"
+
+      - name: Install Pilum
+        run: go install github.com/sid-technologies/pilum@latest
+
+      - name: Run Pilum build
+        run: pilum build -t "v${{ steps.version.outputs.VERSION }}" scuta
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Run Pilum deploy (update Homebrew tap)
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: pilum deploy -t "v${{ steps.version.outputs.VERSION }}" --only-tags=deploy scuta

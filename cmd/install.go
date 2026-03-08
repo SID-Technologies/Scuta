@@ -1,11 +1,12 @@
 package cmd
 
 import (
-	"sort"
+	"sync"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
 	"github.com/sid-technologies/scuta/lib/github"
+	"github.com/sid-technologies/scuta/lib/graph"
 	"github.com/sid-technologies/scuta/lib/history"
 	"github.com/sid-technologies/scuta/lib/installer"
 	"github.com/sid-technologies/scuta/lib/lock"
@@ -14,6 +15,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/registry"
 	"github.com/sid-technologies/scuta/lib/state"
 	"github.com/sid-technologies/scuta/lib/suggest"
+	workerqueue "github.com/sid-technologies/scuta/lib/worker_queue"
 
 	"github.com/spf13/cobra"
 )
@@ -49,7 +51,6 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	var toolNames []string
 	if allFlag {
 		toolNames = reg.Names()
-		sort.Strings(toolNames)
 	} else if len(args) == 1 {
 		toolName := args[0]
 		if _, ok := reg.Get(toolName); !ok {
@@ -66,6 +67,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		output.Error("specify a tool name or use --all")
 		return nil
 	}
+
+	// Sort by dependency order using the graph
+	toolNames = orderByDependencies(toolNames, reg)
 
 	scutaDir, err := path.ScutaDir()
 	if err != nil {
@@ -88,59 +92,15 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	inst := installer.New(ghClient, scutaDir)
 
 	start := time.Now()
+
+	// Use parallel installs for --all with multiple tools, sequential otherwise
 	var toolResults []history.ToolResult
-	successCount := 0
+	var successCount int
 
-	for _, toolName := range toolNames {
-		tool, _ := reg.Get(toolName)
-		toolStart := time.Now()
-
-		// Check if already installed at same version (skip unless force)
-		if !forceFlag && versionFlag == "" {
-			if ts, installed := st.GetTool(toolName); installed {
-				output.Info("%s %s already installed (use --force to reinstall)", toolName, ts.Version)
-				toolResults = append(toolResults, history.ToolResult{
-					Name:     toolName,
-					Action:   "install",
-					Version:  ts.Version,
-					Success:  true,
-					Duration: time.Since(toolStart).Round(time.Millisecond).String(),
-				})
-				successCount++
-				continue
-			}
-		}
-
-		output.Info("Installing %s...", toolName)
-
-		result, err := inst.Install(toolName, tool.Repo, versionFlag, forceFlag)
-		if err != nil {
-			output.Error("Failed to install %s: %v", toolName, err)
-			toolResults = append(toolResults, history.ToolResult{
-				Name:     toolName,
-				Action:   "install",
-				Success:  false,
-				Duration: time.Since(toolStart).Round(time.Millisecond).String(),
-				Error:    err.Error(),
-			})
-			continue
-		}
-
-		st.SetTool(toolName, state.ToolState{
-			Version:     result.Version,
-			InstalledAt: time.Now(),
-			BinaryPath:  result.BinaryPath,
-		})
-
-		output.Success("Installed %s %s", toolName, result.Version)
-		toolResults = append(toolResults, history.ToolResult{
-			Name:     toolName,
-			Action:   "install",
-			Version:  result.Version,
-			Success:  true,
-			Duration: time.Since(toolStart).Round(time.Millisecond).String(),
-		})
-		successCount++
+	if allFlag && len(toolNames) > 1 {
+		toolResults, successCount = installParallel(toolNames, reg, inst, st, versionFlag, forceFlag)
+	} else {
+		toolResults, successCount = installSequential(toolNames, reg, inst, st, versionFlag, forceFlag)
 	}
 
 	// Save state
@@ -161,4 +121,233 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// installSequential installs tools one at a time.
+func installSequential(
+	toolNames []string,
+	reg *registry.Registry,
+	inst *installer.Installer,
+	st *state.State,
+	versionFlag string,
+	forceFlag bool,
+) ([]history.ToolResult, int) {
+	var toolResults []history.ToolResult
+	successCount := 0
+
+	for _, toolName := range toolNames {
+		result := installOneTool(toolName, reg, inst, st, versionFlag, forceFlag)
+		toolResults = append(toolResults, result)
+		if result.Success {
+			successCount++
+		}
+	}
+
+	return toolResults, successCount
+}
+
+// installParallel installs tools concurrently using a worker queue.
+// Tools at the same dependency depth run in parallel; deeper levels wait.
+func installParallel(
+	toolNames []string,
+	reg *registry.Registry,
+	inst *installer.Installer,
+	st *state.State,
+	versionFlag string,
+	forceFlag bool,
+) ([]history.ToolResult, int) {
+	// Group tools by dependency depth
+	depths := calculateDepths(toolNames, reg)
+	groups := groupByDepth(toolNames, depths)
+
+	var mu sync.Mutex
+	var allResults []history.ToolResult
+	totalSuccess := 0
+
+	// Install each depth level in parallel, but wait between levels
+	for _, group := range groups {
+		if len(group) == 1 {
+			// Single tool — no need for worker queue overhead
+			result := installOneTool(group[0], reg, inst, st, versionFlag, forceFlag)
+			allResults = append(allResults, result)
+			if result.Success {
+				totalSuccess++
+			}
+			continue
+		}
+
+		// Multiple tools at this depth — run in parallel
+		wq := workerqueue.NewWorkQueue(func(task *workerqueue.TaskInfo) bool {
+			result := installOneTool(task.ToolName, reg, inst, st, versionFlag, forceFlag)
+			mu.Lock()
+			allResults = append(allResults, result)
+			if result.Success {
+				totalSuccess++
+			}
+			mu.Unlock()
+			return result.Success
+		}, 0) // 0 = use default (NumCPU/2)
+
+		for _, toolName := range group {
+			wq.AddTask(workerqueue.NewTaskInfo(toolName, versionFlag, "install"))
+		}
+
+		wq.Execute()
+	}
+
+	return allResults, totalSuccess
+}
+
+// installOneTool installs a single tool and returns the result.
+func installOneTool(
+	toolName string,
+	reg *registry.Registry,
+	inst *installer.Installer,
+	st *state.State,
+	versionFlag string,
+	forceFlag bool,
+) history.ToolResult {
+	tool, _ := reg.Get(toolName)
+	toolStart := time.Now()
+
+	// Check if already installed (skip unless force)
+	if !forceFlag && versionFlag == "" {
+		if ts, installed := st.GetTool(toolName); installed {
+			output.Info("%s %s already installed (use --force to reinstall)", toolName, ts.Version)
+			return history.ToolResult{
+				Name:     toolName,
+				Action:   "install",
+				Version:  ts.Version,
+				Success:  true,
+				Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+			}
+		}
+	}
+
+	output.Info("Installing %s...", toolName)
+
+	result, err := inst.Install(toolName, tool.Repo, versionFlag, forceFlag)
+	if err != nil {
+		output.Error("Failed to install %s: %v", toolName, err)
+		return history.ToolResult{
+			Name:     toolName,
+			Action:   "install",
+			Success:  false,
+			Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+			Error:    err.Error(),
+		}
+	}
+
+	st.SetTool(toolName, state.ToolState{
+		Version:     result.Version,
+		InstalledAt: time.Now(),
+		BinaryPath:  result.BinaryPath,
+	})
+
+	output.Success("Installed %s %s", toolName, result.Version)
+	return history.ToolResult{
+		Name:     toolName,
+		Action:   "install",
+		Version:  result.Version,
+		Success:  true,
+		Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+	}
+}
+
+// orderByDependencies sorts tool names so dependencies come first.
+// Falls back to the original order if there are no dependencies or errors.
+func orderByDependencies(toolNames []string, reg *registry.Registry) []string {
+	g := graph.New()
+
+	// Build graph from registry dependencies
+	nameSet := make(map[string]bool, len(toolNames))
+	for _, name := range toolNames {
+		nameSet[name] = true
+	}
+
+	for _, name := range toolNames {
+		tool, _ := reg.Get(name)
+		// Only include dependencies that are in our install set
+		var deps []string
+		for _, dep := range tool.DependsOn {
+			if nameSet[dep] {
+				deps = append(deps, dep)
+			}
+		}
+		g.AddNode(name, deps)
+	}
+
+	if err := g.ValidateDependencies(); err != nil {
+		output.Debugf("Dependency validation failed, using default order: %v", err)
+		return toolNames
+	}
+
+	sorted, err := g.TopologicalSort()
+	if err != nil {
+		output.Debugf("Topological sort failed, using default order: %v", err)
+		return toolNames
+	}
+
+	return sorted
+}
+
+// calculateDepths returns the dependency depth of each tool.
+func calculateDepths(toolNames []string, reg *registry.Registry) map[string]int {
+	g := graph.New()
+
+	nameSet := make(map[string]bool, len(toolNames))
+	for _, name := range toolNames {
+		nameSet[name] = true
+	}
+
+	for _, name := range toolNames {
+		tool, _ := reg.Get(name)
+		var deps []string
+		for _, dep := range tool.DependsOn {
+			if nameSet[dep] {
+				deps = append(deps, dep)
+			}
+		}
+		g.AddNode(name, deps)
+	}
+
+	depths, err := g.CalculateDepths()
+	if err != nil {
+		output.Debugf("Depth calculation failed: %v", err)
+		// Return all at depth 0 (everything parallel)
+		result := make(map[string]int, len(toolNames))
+		for _, name := range toolNames {
+			result[name] = 0
+		}
+		return result
+	}
+
+	return depths
+}
+
+// groupByDepth groups tool names by their dependency depth for parallel execution.
+// Returns groups in order: depth 0 first, then depth 1, etc.
+func groupByDepth(toolNames []string, depths map[string]int) [][]string {
+	maxDepth := 0
+	for _, d := range depths {
+		if d > maxDepth {
+			maxDepth = d
+		}
+	}
+
+	groups := make([][]string, maxDepth+1)
+	for _, name := range toolNames {
+		d := depths[name]
+		groups[d] = append(groups[d], name)
+	}
+
+	// Filter out empty groups
+	var result [][]string
+	for _, group := range groups {
+		if len(group) > 0 {
+			result = append(result, group)
+		}
+	}
+
+	return result
 }

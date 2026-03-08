@@ -9,3 +9,5 @@ tools:
   mcp-gen:
     description: "Generate MCP servers from OpenAPI specs"
     repo: sid-technologies/mcp-gen
+    depends_on:
+      - api-gen

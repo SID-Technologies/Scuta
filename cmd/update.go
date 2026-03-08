@@ -22,20 +22,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var updateCmd = &cobra.Command{
-	Use:   "update [tool]",
-	Short: "Update tools to their latest versions",
-	Long: `With no arguments, updates ALL installed tools AND scuta itself.
+func UpdateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update [tool]",
+		Short: "Update tools to their latest versions",
+		Long: `With no arguments, updates ALL installed tools AND scuta itself.
 With a tool name, updates only that tool.`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: runUpdate,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runUpdate,
+	}
+
+	cmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
+	cmd.Flags().Bool("dry-run", false, "Show what would be updated without updating")
+
+	return cmd
 }
 
 //nolint:gochecknoinits // Standard Cobra pattern
 func init() {
-	updateCmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
-	updateCmd.Flags().Bool("dry-run", false, "Show what would be updated without updating")
-	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(UpdateCmd())
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {

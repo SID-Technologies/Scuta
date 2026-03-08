@@ -2,6 +2,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,6 +21,9 @@ type Config struct {
 
 	// GithubToken is an optional GitHub token for private repo access.
 	GithubToken string `yaml:"github_token,omitempty"`
+
+	// RegistryURL overrides the default remote registry URL.
+	RegistryURL string `yaml:"registry_url,omitempty"`
 }
 
 // DefaultConfig returns a Config with default values.
@@ -76,4 +80,55 @@ func (c Config) UpdateIntervalDuration() time.Duration {
 		return 24 * time.Hour
 	}
 	return d
+}
+
+// ValidKeys returns the list of valid configuration keys.
+func ValidKeys() []string {
+	return []string{"update_interval", "github_token", "registry_url"}
+}
+
+// DefaultValue returns the default value for a given config key.
+func DefaultValue(key string) string {
+	defaults := DefaultConfig()
+	switch key {
+	case "update_interval":
+		return defaults.UpdateInterval
+	case "github_token":
+		return defaults.GithubToken
+	case "registry_url":
+		return defaults.RegistryURL
+	default:
+		return ""
+	}
+}
+
+// FieldMap returns a map of config key names to their current values.
+func (c Config) FieldMap() map[string]string {
+	return map[string]string{
+		"update_interval": c.UpdateInterval,
+		"github_token":    c.GithubToken,
+		"registry_url":    c.RegistryURL,
+	}
+}
+
+// SetField sets a config field by its YAML key name.
+// Returns an error for unknown keys.
+func (c *Config) SetField(key, value string) error {
+	switch key {
+	case "update_interval":
+		c.UpdateInterval = value
+	case "github_token":
+		c.GithubToken = value
+	case "registry_url":
+		c.RegistryURL = value
+	default:
+		return fmt.Errorf("unknown config key: %s", key)
+	}
+	return nil
+}
+
+// ResetField resets a config field to its default value.
+// Returns an error for unknown keys.
+func (c *Config) ResetField(key string) error {
+	return c.SetField(key, DefaultValue(key))
 }

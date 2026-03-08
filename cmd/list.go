@@ -11,17 +11,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "Show all tools with install status",
-	Long: `Displays all tools from the registry with their current install status,
+func ListCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "Show all tools with install status",
+		Long: `Displays all tools from the registry with their current install status,
 installed version, and latest available version.`,
-	RunE: runList,
+		RunE: runList,
+	}
+
+	return cmd
 }
 
 //nolint:gochecknoinits // Standard Cobra pattern
 func init() {
-	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(ListCmd())
 }
 
 func runList(_ *cobra.Command, _ []string) error {
@@ -51,6 +55,7 @@ func runList(_ *cobra.Command, _ []string) error {
 			Repo        string `json:"repo"`
 			Installed   string `json:"installed"`
 			Status      string `json:"status"`
+			Source      string `json:"source"`
 		}
 
 		var tools []toolInfo
@@ -62,6 +67,7 @@ func runList(_ *cobra.Command, _ []string) error {
 				Name:        name,
 				Description: tool.Description,
 				Repo:        tool.Repo,
+				Source:      reg.Source(name),
 			}
 
 			if installed {
@@ -80,7 +86,7 @@ func runList(_ *cobra.Command, _ []string) error {
 	}
 
 	// Table output mode
-	headers := []string{"TOOL", "VERSION", "STATUS", "DESCRIPTION"}
+	headers := []string{"TOOL", "VERSION", "STATUS", "SOURCE", "DESCRIPTION"}
 	var rows []output.TableRow
 
 	for _, name := range names {
@@ -96,7 +102,7 @@ func runList(_ *cobra.Command, _ []string) error {
 		}
 
 		rows = append(rows, output.TableRow{
-			Columns: []string{name, versionStr, statusStr, tool.Description},
+			Columns: []string{name, versionStr, statusStr, reg.Source(name), tool.Description},
 		})
 	}
 

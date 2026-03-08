@@ -24,23 +24,28 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var installCmd = &cobra.Command{
-	Use:   "install <tool>",
-	Short: "Install a tool from the registry",
-	Long: `Downloads the correct binary for your OS/architecture from the tool's
+func InstallCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "install <tool>",
+		Short: "Install a tool from the registry",
+		Long: `Downloads the correct binary for your OS/architecture from the tool's
 GitHub Releases, verifies checksum, and places it in ~/.scuta/bin/.`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: runInstall,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runInstall,
+	}
+
+	cmd.Flags().Bool("all", false, "Install all tools from registry")
+	cmd.Flags().String("version", "", "Install a specific version (default: latest)")
+	cmd.Flags().Bool("force", false, "Reinstall even if already installed")
+	cmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
+	cmd.Flags().Bool("dry-run", false, "Show what would be installed without installing")
+
+	return cmd
 }
 
 //nolint:gochecknoinits // Standard Cobra pattern
 func init() {
-	installCmd.Flags().Bool("all", false, "Install all tools from registry")
-	installCmd.Flags().String("version", "", "Install a specific version (default: latest)")
-	installCmd.Flags().Bool("force", false, "Reinstall even if already installed")
-	installCmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
-	installCmd.Flags().Bool("dry-run", false, "Show what would be installed without installing")
-	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(InstallCmd())
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {

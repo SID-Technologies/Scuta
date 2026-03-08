@@ -63,7 +63,6 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	scutaDir, err := path.ScutaDir()
 	if err != nil {
 		printCheck(false, "Scuta directory")
-		issues++
 		return nil
 	}
 

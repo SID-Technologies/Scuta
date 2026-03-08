@@ -228,7 +228,8 @@ func extractTarGz(src string, dest string) error {
 				return errors.Wrap(err, "creating parent directory")
 			}
 
-			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, os.FileMode(header.Mode))
+			//nolint:gosec // Mode is from trusted archive header
+			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, os.FileMode(header.Mode&0o777))
 			if err != nil {
 				return errors.Wrap(err, "creating file %s", target)
 			}
@@ -239,6 +240,8 @@ func extractTarGz(src string, dest string) error {
 				return errors.Wrap(err, "writing file %s", target)
 			}
 			outFile.Close()
+		default:
+			// Skip unsupported entry types (symlinks, etc.)
 		}
 	}
 

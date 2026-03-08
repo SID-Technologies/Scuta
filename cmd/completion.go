@@ -1,14 +1,15 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 )
 
 var completionCmd = &cobra.Command{
-	Use:       "completion <shell>",
-	Short:     "Generate shell completion scripts",
+	Use:   "completion <shell>",
+	Short: "Generate shell completion scripts",
 	Long: `Generate shell completion scripts for bash, zsh, or fish.
 
 To install completions:
@@ -40,6 +41,6 @@ func runCompletion(_ *cobra.Command, args []string) error {
 	case "fish":
 		return rootCmd.GenFishCompletion(os.Stdout, true)
 	default:
-		return rootCmd.GenZshCompletion(os.Stdout)
+		return fmt.Errorf("unsupported shell %q (use bash, zsh, or fish)", args[0])
 	}
 }

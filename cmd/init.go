@@ -79,6 +79,10 @@ func runInit(_ *cobra.Command, _ []string) error {
 	fmt.Println("  scuta doctor           Verify everything is working")
 	fmt.Println()
 
+	shell := detectShell()
+	output.Info("Shell completions: scuta completion %s", shell)
+	fmt.Println()
+
 	return nil
 }
 

@@ -2,6 +2,7 @@
 package registry
 
 import (
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -152,7 +153,7 @@ func loadCache(scutaDir string) (*Registry, error) {
 
 	// Check if cache is still fresh
 	if time.Since(info.ModTime()) > cacheTTL {
-		return nil, fmt.Errorf("cache expired")
+		return nil, stderrors.New("cache expired")
 	}
 
 	data, err := os.ReadFile(fp)

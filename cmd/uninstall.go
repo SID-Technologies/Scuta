@@ -1,7 +1,16 @@
 package cmd
 
 import (
+	"time"
+
+	"github.com/sid-technologies/scuta/lib/github"
+	"github.com/sid-technologies/scuta/lib/history"
+	"github.com/sid-technologies/scuta/lib/installer"
 	"github.com/sid-technologies/scuta/lib/output"
+	"github.com/sid-technologies/scuta/lib/path"
+	"github.com/sid-technologies/scuta/lib/registry"
+	"github.com/sid-technologies/scuta/lib/state"
+	"github.com/sid-technologies/scuta/lib/suggest"
 
 	"github.com/spf13/cobra"
 )
@@ -12,12 +21,80 @@ var uninstallCmd = &cobra.Command{
 	Long: `Removes the tool binary from ~/.scuta/bin/ and clears its state entry.
 Does not affect Homebrew-installed versions of the same tool.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(_ *cobra.Command, _ []string) {
-		output.Warning("scuta uninstall is not yet implemented")
-	},
+	RunE: runUninstall,
 }
 
 //nolint:gochecknoinits // Standard Cobra pattern
 func init() {
 	rootCmd.AddCommand(uninstallCmd)
+}
+
+func runUninstall(_ *cobra.Command, args []string) error {
+	toolName := args[0]
+
+	reg, err := registry.Load()
+	if err != nil {
+		return err
+	}
+
+	// Validate tool name
+	if _, ok := reg.Get(toolName); !ok {
+		suggestion := suggest.FormatSuggestion(toolName, reg.Names())
+		if suggestion != "" {
+			output.Error("unknown tool %q — %s", toolName, suggestion)
+		} else {
+			output.Error("unknown tool %q. Run 'scuta list' to see available tools", toolName)
+		}
+		return nil
+	}
+
+	scutaDir, err := path.ScutaDir()
+	if err != nil {
+		return err
+	}
+
+	st, err := state.Load(scutaDir)
+	if err != nil {
+		return err
+	}
+
+	ts, installed := st.GetTool(toolName)
+	if !installed {
+		output.Warning("%s is not installed", toolName)
+		return nil
+	}
+
+	start := time.Now()
+
+	ghClient := github.NewClient("")
+	inst := installer.New(ghClient, scutaDir)
+
+	output.Info("Uninstalling %s %s...", toolName, ts.Version)
+
+	if err := inst.Uninstall(toolName); err != nil {
+		output.Error("Failed to uninstall %s: %v", toolName, err)
+		return nil
+	}
+
+	st.RemoveTool(toolName)
+	if err := st.Save(scutaDir); err != nil {
+		output.Error("Failed to save state: %v", err)
+	}
+
+	// Record history
+	entry := history.NewEntry("uninstall", true, time.Since(start), []history.ToolResult{
+		{
+			Name:     toolName,
+			Action:   "uninstall",
+			Version:  ts.Version,
+			Success:  true,
+			Duration: time.Since(start).Round(time.Millisecond).String(),
+		},
+	})
+	if err := history.Record(scutaDir, entry); err != nil {
+		output.Debugf("Failed to record history: %v", err)
+	}
+
+	output.Success("Uninstalled %s", toolName)
+	return nil
 }

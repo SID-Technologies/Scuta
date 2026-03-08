@@ -1,19 +1,37 @@
 // Package github provides a client for the GitHub Releases API.
 package github
 
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"runtime"
+	"strings"
+
+	"github.com/sid-technologies/scuta/lib/errors"
+	"github.com/sid-technologies/scuta/lib/output"
+)
+
 // Client provides access to GitHub Releases for downloading tool binaries.
 type Client struct {
-	token string
+	token   string
+	baseURL string
 }
 
 // NewClient creates a GitHub API client with an optional auth token.
 func NewClient(token string) *Client {
-	return &Client{token: token}
+	return &Client{
+		token:   token,
+		baseURL: "https://api.github.com",
+	}
 }
 
 // Release represents a GitHub release.
 type Release struct {
 	TagName string  `json:"tag_name"`
+	Name    string  `json:"name"`
 	Assets  []Asset `json:"assets"`
 }
 
@@ -22,6 +40,208 @@ type Asset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+	ContentType        string `json:"content_type"`
 }
 
-// TODO(phase2): Implement GetLatestRelease, DownloadAsset
+// GetLatestRelease fetches the latest release for a given repo (owner/repo format).
+func (c *Client) GetLatestRelease(repo string) (*Release, error) {
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", c.baseURL, repo)
+	output.Debugf("Fetching latest release: %s", url)
+
+	return c.fetchRelease(url)
+}
+
+// GetRelease fetches a specific release by tag for a given repo.
+func (c *Client) GetRelease(repo string, tag string) (*Release, error) {
+	if !strings.HasPrefix(tag, "v") {
+		tag = "v" + tag
+	}
+	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", c.baseURL, repo, tag)
+	output.Debugf("Fetching release %s: %s", tag, url)
+
+	return c.fetchRelease(url)
+}
+
+// fetchRelease performs the HTTP request and parses a Release from the response.
+func (c *Client) fetchRelease(url string) (*Release, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating request")
+	}
+
+	c.addHeaders(req)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, errors.Wrap(err, "fetching release")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, errors.New("release not found at %s", url)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("GitHub API returned %d for %s", resp.StatusCode, url)
+	}
+
+	var release Release
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, errors.Wrap(err, "parsing release JSON")
+	}
+
+	return &release, nil
+}
+
+// DownloadAsset downloads a release asset to the given destination path.
+func (c *Client) DownloadAsset(url string, dest string) error {
+	output.Debugf("Downloading asset: %s → %s", url, dest)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return errors.Wrap(err, "creating download request")
+	}
+
+	c.addHeaders(req)
+	req.Header.Set("Accept", "application/octet-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.Wrap(err, "downloading asset")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("download failed with status %d", resp.StatusCode)
+	}
+
+	f, err := os.Create(dest)
+	if err != nil {
+		return errors.Wrap(err, "creating destination file")
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		return errors.Wrap(err, "writing downloaded data")
+	}
+
+	return nil
+}
+
+// addHeaders adds common headers including auth if a token is set.
+func (c *Client) addHeaders(req *http.Request) {
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+}
+
+// FindAsset finds the best matching asset for the given OS and architecture.
+// It matches GoReleaser naming conventions: {name}_{os}_{arch}.tar.gz
+func FindAsset(assets []Asset, goos string, goarch string) (*Asset, error) {
+	if len(assets) == 0 {
+		return nil, errors.New("release has no assets")
+	}
+
+	normalizedOS := normalizeOS(goos)
+	normalizedArch := normalizeArch(goarch)
+
+	// Build patterns to try, from most specific to least
+	patterns := buildPatterns(normalizedOS, normalizedArch)
+
+	for _, pattern := range patterns {
+		for i := range assets {
+			name := strings.ToLower(assets[i].Name)
+			if matchesPattern(name, pattern) {
+				return &assets[i], nil
+			}
+		}
+	}
+
+	// No match found — list available assets in error
+	var available []string
+	for _, a := range assets {
+		available = append(available, a.Name)
+	}
+	return nil, errors.New(
+		"no asset found for %s/%s. Available: %s",
+		goos, goarch, strings.Join(available, ", "),
+	)
+}
+
+// FindAssetAuto finds the best matching asset for the current OS and architecture.
+func FindAssetAuto(assets []Asset) (*Asset, error) {
+	return FindAsset(assets, runtime.GOOS, runtime.GOARCH)
+}
+
+// buildPatterns returns filename patterns to match, from most specific to least.
+func buildPatterns(os, arch string) []matchPattern {
+	extensions := []string{".tar.gz", ".zip"}
+
+	var patterns []matchPattern
+	for _, ext := range extensions {
+		// {name}_{os}_{arch}.tar.gz — standard GoReleaser
+		patterns = append(patterns, matchPattern{os: os, arch: arch, ext: ext, separator: "_"})
+		// {name}-{os}-{arch}.tar.gz — dash separator
+		patterns = append(patterns, matchPattern{os: os, arch: arch, ext: ext, separator: "-"})
+	}
+
+	return patterns
+}
+
+type matchPattern struct {
+	os        string
+	arch      string
+	ext       string
+	separator string
+}
+
+// matchesPattern checks if a filename matches the given OS/arch/ext pattern.
+func matchesPattern(filename string, p matchPattern) bool {
+	if !strings.HasSuffix(filename, p.ext) {
+		return false
+	}
+
+	// Check that the filename contains both os and arch segments
+	return strings.Contains(filename, p.separator+p.os+p.separator+p.arch) ||
+		strings.Contains(filename, p.separator+p.os+p.separator) && strings.Contains(filename, p.separator+p.arch+".")
+}
+
+// normalizeOS normalizes OS names to match GoReleaser conventions.
+func normalizeOS(goos string) string {
+	switch strings.ToLower(goos) {
+	case "darwin":
+		return "darwin"
+	case "linux":
+		return "linux"
+	case "windows":
+		return "windows"
+	default:
+		return strings.ToLower(goos)
+	}
+}
+
+// normalizeArch normalizes architecture names to match GoReleaser conventions.
+func normalizeArch(goarch string) string {
+	switch strings.ToLower(goarch) {
+	case "amd64", "x86_64":
+		return "amd64"
+	case "arm64", "aarch64":
+		return "arm64"
+	case "386", "i386", "i686":
+		return "386"
+	default:
+		return strings.ToLower(goarch)
+	}
+}
+
+// NormalizeVersion strips the "v" prefix from a version tag.
+func NormalizeVersion(tag string) string {
+	return strings.TrimPrefix(tag, "v")
+}
+
+// VersionFromTag extracts and normalizes a version from a git tag.
+func VersionFromTag(tag string) string {
+	return NormalizeVersion(tag)
+}

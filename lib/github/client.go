@@ -2,6 +2,7 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,34 +45,34 @@ type Asset struct {
 }
 
 // GetLatestRelease fetches the latest release for a given repo (owner/repo format).
-func (c *Client) GetLatestRelease(repo string) (*Release, error) {
+func (c *Client) GetLatestRelease(ctx context.Context, repo string) (*Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", c.baseURL, repo)
 	output.Debugf("Fetching latest release: %s", url)
 
-	return c.fetchRelease(url)
+	return c.fetchRelease(ctx, url)
 }
 
 // GetRelease fetches a specific release by tag for a given repo.
-func (c *Client) GetRelease(repo string, tag string) (*Release, error) {
+func (c *Client) GetRelease(ctx context.Context, repo string, tag string) (*Release, error) {
 	if !strings.HasPrefix(tag, "v") {
 		tag = "v" + tag
 	}
 	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", c.baseURL, repo, tag)
 	output.Debugf("Fetching release %s: %s", tag, url)
 
-	return c.fetchRelease(url)
+	return c.fetchRelease(ctx, url)
 }
 
 // fetchRelease performs the HTTP request and parses a Release from the response.
-func (c *Client) fetchRelease(url string) (*Release, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func (c *Client) fetchRelease(ctx context.Context, url string) (*Release, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "creating request")
 	}
 
 	c.addHeaders(req)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWithRetry(http.DefaultClient, req, defaultMaxAttempts)
 	if err != nil {
 		return nil, errors.Wrap(err, "fetching release")
 	}
@@ -93,11 +94,77 @@ func (c *Client) fetchRelease(url string) (*Release, error) {
 	return &release, nil
 }
 
+// DownloadChecksums downloads and parses the checksums file from a release.
+// It looks for assets named "checksums.txt" or "SHA256SUMS".
+// Returns nil, nil if no checksums asset is found (not an error — best-effort).
+func (c *Client) DownloadChecksums(ctx context.Context, release *Release) (map[string]string, error) {
+	var checksumAsset *Asset
+	for i := range release.Assets {
+		name := strings.ToLower(release.Assets[i].Name)
+		if name == "checksums.txt" || name == "sha256sums" || name == "sha256sums.txt" {
+			checksumAsset = &release.Assets[i]
+			break
+		}
+	}
+
+	if checksumAsset == nil {
+		return nil, nil
+	}
+
+	output.Debugf("Downloading checksums: %s", checksumAsset.BrowserDownloadURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", checksumAsset.BrowserDownloadURL, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating checksums request")
+	}
+
+	c.addHeaders(req)
+	req.Header.Set("Accept", "application/octet-stream")
+
+	resp, err := doWithRetry(http.DefaultClient, req, defaultMaxAttempts)
+	if err != nil {
+		return nil, errors.Wrap(err, "downloading checksums")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("checksums download failed with status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errors.Wrap(err, "reading checksums")
+	}
+
+	// Parse the checksums file — import the parser from installer package
+	// to avoid circular dependency, we inline the parsing here.
+	result := make(map[string]string)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		hash := strings.TrimSpace(parts[0])
+		filename := strings.TrimSpace(parts[1])
+		filename = strings.TrimLeft(filename, " *")
+		if hash != "" && filename != "" {
+			result[filename] = strings.ToLower(hash)
+		}
+	}
+
+	output.Debugf("Parsed %d checksums", len(result))
+	return result, nil
+}
+
 // DownloadAsset downloads a release asset to the given destination path.
-func (c *Client) DownloadAsset(url string, dest string) error {
+func (c *Client) DownloadAsset(ctx context.Context, url string, dest string) error {
 	output.Debugf("Downloading asset: %s → %s", url, dest)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return errors.Wrap(err, "creating download request")
 	}
@@ -105,7 +172,7 @@ func (c *Client) DownloadAsset(url string, dest string) error {
 	c.addHeaders(req)
 	req.Header.Set("Accept", "application/octet-stream")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWithRetry(http.DefaultClient, req, defaultMaxAttempts)
 	if err != nil {
 		return errors.Wrap(err, "downloading asset")
 	}

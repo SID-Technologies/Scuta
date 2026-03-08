@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
@@ -29,10 +33,26 @@ With a tool name, updates only that tool.`,
 
 //nolint:gochecknoinits // Standard Cobra pattern
 func init() {
+	updateCmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
+	updateCmd.Flags().Bool("dry-run", false, "Show what would be updated without updating")
 	rootCmd.AddCommand(updateCmd)
 }
 
-func runUpdate(_ *cobra.Command, args []string) error {
+func runUpdate(cmd *cobra.Command, args []string) error {
+	ctx, cancel := context.WithCancel(cmd.Context())
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		output.Warning("\nInterrupted, cleaning up...")
+		cancel()
+	}()
+	defer signal.Stop(sigChan)
+	defer cancel()
+
+	skipVerifyFlag, _ := cmd.Flags().GetBool("skip-verify")
+	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")
+
 	reg, err := registry.Load()
 	if err != nil {
 		return err
@@ -91,7 +111,7 @@ func runUpdate(_ *cobra.Command, args []string) error {
 	output.Info("Checking for updates...")
 
 	// Check which tools have updates
-	updates := upd.CheckForUpdates(st.Tools, reg.Tools)
+	updates := upd.CheckForUpdates(ctx, st.Tools, reg.Tools)
 
 	// Filter to only requested tools
 	updateMap := make(map[string]updater.UpdateAvailable)
@@ -111,6 +131,14 @@ func runUpdate(_ *cobra.Command, args []string) error {
 
 	if len(toUpdate) == 0 {
 		output.Info("All tools are up to date")
+		return nil
+	}
+
+	// Dry-run: print what would be updated and exit
+	if dryRunFlag {
+		for _, u := range toUpdate {
+			output.Info("[dry run] Would update %s %s → %s", u.Name, u.CurrentVersion, u.LatestVersion)
+		}
 		return nil
 	}
 
@@ -136,7 +164,11 @@ func runUpdate(_ *cobra.Command, args []string) error {
 
 		output.Info("Updating %s %s → %s...", u.Name, u.CurrentVersion, u.LatestVersion)
 
-		result, err := inst.Install(u.Name, tool.Repo, "", true)
+		if ctx.Err() != nil {
+			break
+		}
+
+		result, err := inst.Install(ctx, u.Name, tool.Repo, "", true, skipVerifyFlag)
 		if err != nil {
 			output.Error("Failed to update %s: %v", u.Name, err)
 			toolResults = append(toolResults, history.ToolResult{

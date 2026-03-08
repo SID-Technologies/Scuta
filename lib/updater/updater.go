@@ -2,6 +2,7 @@
 package updater
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"strings"
@@ -37,7 +38,7 @@ func New(ghClient *github.Client) *Updater {
 }
 
 // CheckForUpdates checks all installed tools for available updates.
-func (u *Updater) CheckForUpdates(installed map[string]state.ToolState, tools map[string]registry.Tool) []UpdateAvailable {
+func (u *Updater) CheckForUpdates(ctx context.Context, installed map[string]state.ToolState, tools map[string]registry.Tool) []UpdateAvailable {
 	var updates []UpdateAvailable
 
 	for name, ts := range installed {
@@ -46,7 +47,7 @@ func (u *Updater) CheckForUpdates(installed map[string]state.ToolState, tools ma
 			continue
 		}
 
-		release, err := u.github.GetLatestRelease(tool.Repo)
+		release, err := u.github.GetLatestRelease(ctx, tool.Repo)
 		if err != nil {
 			output.Debugf("Failed to check %s: %v", name, err)
 			continue
@@ -74,8 +75,8 @@ func NeedsCheck(lastCheck time.Time, interval time.Duration) bool {
 }
 
 // CheckSelfUpdate checks if a newer version of Scuta is available.
-func (u *Updater) CheckSelfUpdate(currentVersion string) (*UpdateAvailable, error) {
-	release, err := u.github.GetLatestRelease(scutaRepo)
+func (u *Updater) CheckSelfUpdate(ctx context.Context, currentVersion string) (*UpdateAvailable, error) {
+	release, err := u.github.GetLatestRelease(ctx, scutaRepo)
 	if err != nil {
 		return nil, errors.Wrap(err, "checking for Scuta updates")
 	}

@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
@@ -34,13 +38,28 @@ func init() {
 	installCmd.Flags().Bool("all", false, "Install all tools from registry")
 	installCmd.Flags().String("version", "", "Install a specific version (default: latest)")
 	installCmd.Flags().Bool("force", false, "Reinstall even if already installed")
+	installCmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
+	installCmd.Flags().Bool("dry-run", false, "Show what would be installed without installing")
 	rootCmd.AddCommand(installCmd)
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {
+	ctx, cancel := context.WithCancel(cmd.Context())
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		output.Warning("\nInterrupted, cleaning up...")
+		cancel()
+	}()
+	defer signal.Stop(sigChan)
+	defer cancel()
+
 	allFlag, _ := cmd.Flags().GetBool("all")
 	versionFlag, _ := cmd.Flags().GetString("version")
 	forceFlag, _ := cmd.Flags().GetBool("force")
+	skipVerifyFlag, _ := cmd.Flags().GetBool("skip-verify")
+	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")
 
 	reg, err := registry.Load()
 	if err != nil {
@@ -97,10 +116,17 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	var toolResults []history.ToolResult
 	var successCount int
 
-	if allFlag && len(toolNames) > 1 {
-		toolResults, successCount = installParallel(toolNames, reg, inst, st, versionFlag, forceFlag)
+	if dryRunFlag {
+		toolResults, successCount = installDryRun(ctx, toolNames, reg, ghClient, versionFlag)
+	} else if allFlag && len(toolNames) > 1 {
+		toolResults, successCount = installParallel(ctx, toolNames, reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
 	} else {
-		toolResults, successCount = installSequential(toolNames, reg, inst, st, versionFlag, forceFlag)
+		toolResults, successCount = installSequential(ctx, toolNames, reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
+	}
+
+	// Skip state save and history if canceled or dry-run
+	if ctx.Err() != nil || dryRunFlag {
+		return nil
 	}
 
 	// Save state
@@ -123,20 +149,77 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// installDryRun prints what would be installed without actually installing.
+func installDryRun(
+	ctx context.Context,
+	toolNames []string,
+	reg *registry.Registry,
+	ghClient *github.Client,
+	versionFlag string,
+) ([]history.ToolResult, int) {
+	var toolResults []history.ToolResult
+	successCount := 0
+
+	for _, toolName := range toolNames {
+		if ctx.Err() != nil {
+			break
+		}
+
+		tool, _ := reg.Get(toolName)
+		toolStart := time.Now()
+
+		var version string
+		if versionFlag != "" {
+			version = versionFlag
+		} else {
+			release, err := ghClient.GetLatestRelease(ctx, tool.Repo)
+			if err != nil {
+				output.Error("[dry run] Failed to fetch release for %s: %v", toolName, err)
+				toolResults = append(toolResults, history.ToolResult{
+					Name:     toolName,
+					Action:   "install",
+					Success:  false,
+					Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+					Error:    err.Error(),
+				})
+				continue
+			}
+			version = github.NormalizeVersion(release.TagName)
+		}
+
+		output.Info("[dry run] Would install %s %s", toolName, version)
+		toolResults = append(toolResults, history.ToolResult{
+			Name:     toolName,
+			Action:   "install",
+			Version:  version,
+			Success:  true,
+			Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+		})
+		successCount++
+	}
+
+	return toolResults, successCount
+}
+
 // installSequential installs tools one at a time.
 func installSequential(
+	ctx context.Context,
 	toolNames []string,
 	reg *registry.Registry,
 	inst *installer.Installer,
 	st *state.State,
 	versionFlag string,
 	forceFlag bool,
+	skipVerifyFlag bool,
 ) ([]history.ToolResult, int) {
 	var toolResults []history.ToolResult
 	successCount := 0
 
 	for _, toolName := range toolNames {
-		result := installOneTool(toolName, reg, inst, st, versionFlag, forceFlag)
+		if ctx.Err() != nil {
+			break
+		}
+		result := installOneTool(ctx, toolName, reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
 		toolResults = append(toolResults, result)
 		if result.Success {
 			successCount++
@@ -149,12 +232,14 @@ func installSequential(
 // installParallel installs tools concurrently using a worker queue.
 // Tools at the same dependency depth run in parallel; deeper levels wait.
 func installParallel(
+	ctx context.Context,
 	toolNames []string,
 	reg *registry.Registry,
 	inst *installer.Installer,
 	st *state.State,
 	versionFlag string,
 	forceFlag bool,
+	skipVerifyFlag bool,
 ) ([]history.ToolResult, int) {
 	// Group tools by dependency depth
 	depths := calculateDepths(toolNames, reg)
@@ -166,9 +251,13 @@ func installParallel(
 
 	// Install each depth level in parallel, but wait between levels
 	for _, group := range groups {
+		if ctx.Err() != nil {
+			break
+		}
+
 		if len(group) == 1 {
 			// Single tool — no need for worker queue overhead
-			result := installOneTool(group[0], reg, inst, st, versionFlag, forceFlag)
+			result := installOneTool(ctx, group[0], reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
 			allResults = append(allResults, result)
 			if result.Success {
 				totalSuccess++
@@ -178,7 +267,7 @@ func installParallel(
 
 		// Multiple tools at this depth — run in parallel
 		wq := workerqueue.NewWorkQueue(func(task *workerqueue.TaskInfo) bool {
-			result := installOneTool(task.ToolName, reg, inst, st, versionFlag, forceFlag)
+			result := installOneTool(ctx, task.ToolName, reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
 			mu.Lock()
 			allResults = append(allResults, result)
 			if result.Success {
@@ -200,12 +289,14 @@ func installParallel(
 
 // installOneTool installs a single tool and returns the result.
 func installOneTool(
+	ctx context.Context,
 	toolName string,
 	reg *registry.Registry,
 	inst *installer.Installer,
 	st *state.State,
 	versionFlag string,
 	forceFlag bool,
+	skipVerifyFlag bool,
 ) history.ToolResult {
 	tool, _ := reg.Get(toolName)
 	toolStart := time.Now()
@@ -226,7 +317,7 @@ func installOneTool(
 
 	output.Info("Installing %s...", toolName)
 
-	result, err := inst.Install(toolName, tool.Repo, versionFlag, forceFlag)
+	result, err := inst.Install(ctx, toolName, tool.Repo, versionFlag, forceFlag, skipVerifyFlag)
 	if err != nil {
 		output.Error("Failed to install %s: %v", toolName, err)
 		return history.ToolResult{

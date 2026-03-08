@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -39,15 +40,20 @@ func New(ghClient *github.Client, scutaDir string) *Installer {
 }
 
 // Install downloads and installs a tool binary from GitHub Releases.
-func (inst *Installer) Install(toolName string, repo string, targetVersion string, force bool) (*InstallResult, error) {
+func (inst *Installer) Install(ctx context.Context, toolName string, repo string, targetVersion string, force bool, skipVerify bool) (*InstallResult, error) {
+	// Check for cancellation before starting
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Get the release
 	var release *github.Release
 	var err error
 
 	if targetVersion != "" {
-		release, err = inst.github.GetRelease(repo, targetVersion)
+		release, err = inst.github.GetRelease(ctx, repo, targetVersion)
 	} else {
-		release, err = inst.github.GetLatestRelease(repo)
+		release, err = inst.github.GetLatestRelease(ctx, repo)
 	}
 	if err != nil {
 		return nil, errors.Wrap(err, "fetching release for %s", toolName)
@@ -79,8 +85,32 @@ func (inst *Installer) Install(toolName string, repo string, targetVersion strin
 	defer os.RemoveAll(tmpDir)
 
 	archivePath := filepath.Join(tmpDir, asset.Name)
-	if err := inst.github.DownloadAsset(asset.BrowserDownloadURL, archivePath); err != nil {
+	if err := inst.github.DownloadAsset(ctx, asset.BrowserDownloadURL, archivePath); err != nil {
 		return nil, errors.Wrap(err, "downloading %s", asset.Name)
+	}
+
+	// Checksum verification
+	if skipVerify {
+		output.Warning("Skipping checksum verification (--skip-verify)")
+	} else {
+		checksums, csErr := inst.github.DownloadChecksums(ctx, release)
+		if csErr != nil {
+			output.Warning("Failed to download checksums: %v", csErr)
+		} else if checksums == nil {
+			output.Warning("No checksums.txt in release, skipping verification")
+		} else if expectedHash, ok := checksums[asset.Name]; ok {
+			if err := VerifyChecksum(archivePath, expectedHash); err != nil {
+				return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
+			}
+			output.Debugf("Checksum verified for %s", asset.Name)
+		} else {
+			output.Warning("No checksum found for %s in checksums.txt", asset.Name)
+		}
+	}
+
+	// Check for cancellation before extraction
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 
 	// Extract archive
@@ -107,19 +137,31 @@ func (inst *Installer) Install(toolName string, repo string, targetVersion strin
 		return nil, errors.Wrap(err, "finding binary in archive")
 	}
 
+	// Check for cancellation before installing binary
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Ensure bin directory exists
 	if err := os.MkdirAll(inst.binDir, 0o755); err != nil {
 		return nil, errors.Wrap(err, "creating bin directory")
 	}
 
-	// Copy binary to bin directory
-	if err := copyFile(binarySrc, binaryPath); err != nil {
+	// Atomic install: copy to temp, then rename
+	tempPath := binaryPath + ".tmp"
+	if err := copyFile(binarySrc, tempPath); err != nil {
+		os.Remove(tempPath)
 		return nil, errors.Wrap(err, "installing binary")
 	}
 
-	// Make executable
-	if err := os.Chmod(binaryPath, 0o755); err != nil {
+	if err := os.Chmod(tempPath, 0o755); err != nil {
+		os.Remove(tempPath)
 		return nil, errors.Wrap(err, "setting binary permissions")
+	}
+
+	if err := os.Rename(tempPath, binaryPath); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "atomic rename of binary")
 	}
 
 	output.Debugf("Installed %s %s to %s", toolName, version, binaryPath)

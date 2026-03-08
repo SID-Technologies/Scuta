@@ -26,10 +26,12 @@ Does not affect Homebrew-installed versions of the same tool.`,
 
 //nolint:gochecknoinits // Standard Cobra pattern
 func init() {
+	uninstallCmd.Flags().Bool("dry-run", false, "Show what would be uninstalled without uninstalling")
 	rootCmd.AddCommand(uninstallCmd)
 }
 
-func runUninstall(_ *cobra.Command, args []string) error {
+func runUninstall(cmd *cobra.Command, args []string) error {
+	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")
 	toolName := args[0]
 
 	reg, err := registry.Load()
@@ -61,6 +63,11 @@ func runUninstall(_ *cobra.Command, args []string) error {
 	ts, installed := st.GetTool(toolName)
 	if !installed {
 		output.Warning("%s is not installed", toolName)
+		return nil
+	}
+
+	if dryRunFlag {
+		output.Info("[dry run] Would uninstall %s %s", toolName, ts.Version)
 		return nil
 	}
 

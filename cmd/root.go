@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -136,7 +137,7 @@ func checkForSelfUpdate() {
 	ghClient := github.NewClient(token)
 	upd := updater.New(ghClient)
 
-	update, err := upd.CheckSelfUpdate(version)
+	update, err := upd.CheckSelfUpdate(context.Background(), version)
 	if err != nil {
 		output.Debugf("Update check failed: %v", err)
 		return

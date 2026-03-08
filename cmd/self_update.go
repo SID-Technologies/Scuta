@@ -26,7 +26,8 @@ func init() {
 	rootCmd.AddCommand(selfUpdateCmd)
 }
 
-func runSelfUpdate(_ *cobra.Command, _ []string) error {
+func runSelfUpdate(cmd *cobra.Command, _ []string) error {
+	ctx := cmd.Context()
 	// Check if installed via Homebrew
 	if updater.IsHomebrew() {
 		output.Info("Scuta was installed via Homebrew. Run:")
@@ -45,7 +46,7 @@ func runSelfUpdate(_ *cobra.Command, _ []string) error {
 
 	output.Info("Checking for updates...")
 
-	update, err := upd.CheckSelfUpdate(version)
+	update, err := upd.CheckSelfUpdate(ctx, version)
 	if err != nil {
 		return err
 	}
@@ -59,7 +60,7 @@ func runSelfUpdate(_ *cobra.Command, _ []string) error {
 
 	// Download and install new binary
 	inst := installer.New(ghClient, scutaDir)
-	result, err := inst.Install("scuta", update.Repo, update.LatestVersion, true)
+	result, err := inst.Install(ctx, "scuta", update.Repo, update.LatestVersion, true, false)
 	if err != nil {
 		return err
 	}

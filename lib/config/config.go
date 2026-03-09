@@ -34,6 +34,9 @@ type Config struct {
 	// GithubBaseURL overrides the GitHub API base URL for GitHub Enterprise.
 	// Example: https://github.example.com/api/v3
 	GithubBaseURL string `yaml:"github_base_url,omitempty"`
+
+	// PolicyURL is a remote URL to fetch policy.yaml from.
+	PolicyURL string `yaml:"policy_url,omitempty"`
 }
 
 // DefaultConfig returns a Config with default values.
@@ -101,7 +104,7 @@ func (c Config) UpdateIntervalDuration() time.Duration {
 
 // ValidKeys returns the list of valid configuration keys.
 func ValidKeys() []string {
-	return []string{"update_interval", "github_token", "registry_url", "github_base_url"}
+	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url"}
 }
 
 // DefaultValue returns the default value for a given config key.
@@ -116,6 +119,8 @@ func DefaultValue(key string) string {
 		return defaults.RegistryURL
 	case "github_base_url":
 		return defaults.GithubBaseURL
+	case "policy_url":
+		return defaults.PolicyURL
 	default:
 		return ""
 	}
@@ -128,6 +133,7 @@ func (c Config) FieldMap() map[string]string {
 		"github_token":    c.GithubToken,
 		"registry_url":    c.RegistryURL,
 		"github_base_url": c.GithubBaseURL,
+		"policy_url":      c.PolicyURL,
 	}
 }
 
@@ -143,6 +149,8 @@ func (c *Config) SetField(key, value string) error {
 		c.RegistryURL = value
 	case "github_base_url":
 		c.GithubBaseURL = value
+	case "policy_url":
+		c.PolicyURL = value
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

@@ -22,7 +22,8 @@ func DoctorCmd() *cobra.Command {
   - All installed binaries are executable
   - State file is valid
   - GitHub authentication is configured
-  - Registry is reachable`,
+  - Registry is reachable
+  - Policy compliance (version constraints)`,
 		RunE: runDoctor,
 	}
 

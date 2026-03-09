@@ -125,6 +125,38 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		printCheck(true, "Registry is loadable")
 	}
 
+	// 7. Policy compliance
+	pol := loadPolicy(scutaDir)
+	if pol != nil {
+		// Check Scuta version
+		if v := pol.CheckScutaVersion(version); v != nil {
+			printCheck(false, "Scuta version meets policy minimum (%s)", v.Message)
+			issues++
+		} else if pol.MinScutaVersion != "" {
+			printCheck(true, "Scuta version meets policy minimum (>= %s)", pol.MinScutaVersion)
+		}
+
+		// Check all installed tool versions
+		if st != nil && len(st.Tools) > 0 {
+			installed := make(map[string]string, len(st.Tools))
+			for name, ts := range st.Tools {
+				installed[name] = ts.Version
+			}
+
+			violations := pol.CheckAll(installed)
+			if len(violations) == 0 {
+				printCheck(true, "All installed tools comply with policy")
+			} else {
+				for _, v := range violations {
+					printCheck(false, "%s %s: %s", v.Tool, v.Version, v.Message)
+					issues++
+				}
+			}
+		}
+	} else {
+		output.Dimmed("  No policy configured")
+	}
+
 	// Summary
 	fmt.Println()
 	if issues == 0 {

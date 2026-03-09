@@ -9,7 +9,7 @@ Scuta manages SID's developer CLI tools — installing, updating, and discoverin
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew install sid-technologies/tap/scuta
+brew install sid-technologies/scuta/scuta
 ```
 
 ### Go Install
@@ -30,7 +30,7 @@ make build
 ## Quick Start
 
 ```bash
-# Set up Scuta on your machine
+# Set up Scuta on your machine (interactive setup)
 scuta init
 
 # Install all SID tools
@@ -53,6 +53,8 @@ scuta update
 
 ## Commands
 
+### Core
+
 | Command | Description |
 |---------|-------------|
 | `scuta init` | Setup ~/.scuta/, detect auth, configure PATH |
@@ -65,6 +67,46 @@ scuta update
 | `scuta self-update` | Update Scuta itself |
 | `scuta version` | Print version |
 
+### Configuration
+
+| Command | Description |
+|---------|-------------|
+| `scuta config list` | Show all config values |
+| `scuta config get <key>` | Get a config value |
+| `scuta config set <key> <value>` | Set a config value |
+| `scuta config reset <key>` | Reset a config value to its default |
+
+Valid config keys: `update_interval`, `github_token`, `registry_url`
+
+### Registry
+
+| Command | Description |
+|---------|-------------|
+| `scuta registry list` | List local registry entries |
+| `scuta registry list --all` | Show merged registry with source info |
+| `scuta registry add <name> --repo <owner/repo>` | Add a tool to the local registry |
+| `scuta registry remove <name>` | Remove a tool from the local registry |
+
+### Shell Completions
+
+```bash
+scuta completion bash > /etc/bash_completion.d/scuta
+scuta completion zsh > "${fpath[1]}/_scuta"
+scuta completion fish > ~/.config/fish/completions/scuta.fish
+```
+
+## Registry Modes
+
+During `scuta init`, you choose a registry mode:
+
+| Mode | Description |
+|------|-------------|
+| **Public** (default) | Uses the official SID registry — no auth needed |
+| **Private** | Uses a private GitHub-hosted registry (requires token) |
+| **Local only** | No remote registry — manage tools manually via `scuta registry add` |
+
+Change anytime with `scuta config set registry_url <url>` or `scuta config set registry_url local`.
+
 ## Global Flags
 
 | Flag | Description |
@@ -72,3 +114,7 @@ scuta update
 | `--verbose, -v` | Show detailed output |
 | `--quiet, -q` | Suppress non-error output |
 | `--json` | Output in JSON format |
+
+## License
+
+BSL 1.1

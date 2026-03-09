@@ -81,15 +81,25 @@ func runInit(_ *cobra.Command, _ []string) error {
 		printPathInstructions(binDir, shell)
 	}
 
-	// 5. Print next steps
+	// 5. Install shell completions (only prompt on first init)
+	shell := detectShell()
+	if shell != "sh" && !completionsInstalled(shell) {
+		reader := prompt.NewReader(bufio.NewReader(os.Stdin))
+		answer, err := reader.Ask("Install shell completions? (Y/n)", "Y")
+		if err == nil && (answer == "Y" || answer == "y" || answer == "yes" || answer == "") {
+			if err := installCompletions(shell); err != nil {
+				output.Warning("Failed to install completions: %v", err)
+			}
+		}
+	} else if completionsInstalled(shell) {
+		output.Success("Shell completions already installed")
+	}
+
+	// 6. Print next steps
 	output.Header("Next Steps")
 	fmt.Println("  scuta install --all    Install all available tools")
 	fmt.Println("  scuta list             See available tools")
 	fmt.Println("  scuta doctor           Verify everything is working")
-	fmt.Println()
-
-	shell := detectShell()
-	output.Info("Shell completions: scuta completion %s", shell)
 	fmt.Println()
 
 	return nil

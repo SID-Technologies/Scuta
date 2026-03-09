@@ -14,8 +14,14 @@ import (
 
 const configFile = "config.yaml"
 
+// CurrentConfigVersion is the current config file format version.
+const CurrentConfigVersion = 1
+
 // Config represents the user's Scuta configuration.
 type Config struct {
+	// Version tracks the config file format version for migrations.
+	Version int `yaml:"version,omitempty"`
+
 	// UpdateInterval is how often to check for updates (default: 24h).
 	UpdateInterval string `yaml:"update_interval,omitempty"`
 
@@ -24,11 +30,16 @@ type Config struct {
 
 	// RegistryURL overrides the default remote registry URL.
 	RegistryURL string `yaml:"registry_url,omitempty"`
+
+	// GithubBaseURL overrides the GitHub API base URL for GitHub Enterprise.
+	// Example: https://github.example.com/api/v3
+	GithubBaseURL string `yaml:"github_base_url,omitempty"`
 }
 
 // DefaultConfig returns a Config with default values.
 func DefaultConfig() Config {
 	return Config{
+		Version:        CurrentConfigVersion,
 		UpdateInterval: "24h",
 	}
 }
@@ -49,6 +60,12 @@ func Load(scutaDir string) (Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, errors.Wrap(err, "parsing config file")
+	}
+
+	// Auto-migrate pre-versioned config files
+	if cfg.Version == 0 {
+		cfg.Version = CurrentConfigVersion
+		_ = Save(scutaDir, cfg)
 	}
 
 	return cfg, nil
@@ -84,7 +101,7 @@ func (c Config) UpdateIntervalDuration() time.Duration {
 
 // ValidKeys returns the list of valid configuration keys.
 func ValidKeys() []string {
-	return []string{"update_interval", "github_token", "registry_url"}
+	return []string{"update_interval", "github_token", "registry_url", "github_base_url"}
 }
 
 // DefaultValue returns the default value for a given config key.
@@ -97,6 +114,8 @@ func DefaultValue(key string) string {
 		return defaults.GithubToken
 	case "registry_url":
 		return defaults.RegistryURL
+	case "github_base_url":
+		return defaults.GithubBaseURL
 	default:
 		return ""
 	}
@@ -108,6 +127,7 @@ func (c Config) FieldMap() map[string]string {
 		"update_interval": c.UpdateInterval,
 		"github_token":    c.GithubToken,
 		"registry_url":    c.RegistryURL,
+		"github_base_url": c.GithubBaseURL,
 	}
 }
 
@@ -121,6 +141,8 @@ func (c *Config) SetField(key, value string) error {
 		c.GithubToken = value
 	case "registry_url":
 		c.RegistryURL = value
+	case "github_base_url":
+		c.GithubBaseURL = value
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

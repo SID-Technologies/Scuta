@@ -21,8 +21,12 @@ type ToolState struct {
 	BinaryPath  string    `json:"binary_path"`
 }
 
+// CurrentStateVersion is the current state file format version.
+const CurrentStateVersion = 1
+
 // State represents the full Scuta state file.
 type State struct {
+	Version         int                  `json:"version,omitempty"`
 	LastUpdateCheck time.Time            `json:"last_update_check"`
 	Tools           map[string]ToolState `json:"tools"`
 }
@@ -30,7 +34,8 @@ type State struct {
 // NewState returns an empty state.
 func NewState() *State {
 	return &State{
-		Tools: make(map[string]ToolState),
+		Version: CurrentStateVersion,
+		Tools:   make(map[string]ToolState),
 	}
 }
 
@@ -58,6 +63,12 @@ func Load(scutaDir string) (*State, error) {
 
 	if s.Tools == nil {
 		s.Tools = make(map[string]ToolState)
+	}
+
+	// Auto-migrate pre-versioned state files
+	if s.Version == 0 {
+		s.Version = CurrentStateVersion
+		_ = s.Save(scutaDir)
 	}
 
 	return &s, nil

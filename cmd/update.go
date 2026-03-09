@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
-	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/history"
 	"github.com/sid-technologies/scuta/lib/installer"
 	"github.com/sid-technologies/scuta/lib/lock"
@@ -74,7 +73,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	token := auth.ResolveTokenWithConfig(scutaDir)
-	ghClient := github.NewClient(token)
+	ghClient := newGitHubClient(token, scutaDir)
 	upd := updater.New(ghClient)
 
 	// Determine which tools to update

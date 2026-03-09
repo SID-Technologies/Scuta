@@ -39,6 +39,7 @@ GitHub Releases, verifies checksum, and places it in ~/.scuta/bin/.`,
 	cmd.Flags().Bool("force", false, "Reinstall even if already installed")
 	cmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
 	cmd.Flags().Bool("dry-run", false, "Show what would be installed without installing")
+	cmd.Flags().String("from", "", "Install from a local archive file (offline/air-gapped)")
 
 	return cmd
 }
@@ -65,6 +66,12 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	forceFlag, _ := cmd.Flags().GetBool("force")
 	skipVerifyFlag, _ := cmd.Flags().GetBool("skip-verify")
 	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")
+	fromFlag, _ := cmd.Flags().GetString("from")
+
+	// Offline install from local archive
+	if fromFlag != "" {
+		return runInstallFromArchive(ctx, args, fromFlag)
+	}
 
 	reg, err := registry.Load()
 	if err != nil {
@@ -112,7 +119,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	token := auth.ResolveTokenWithConfig(scutaDir)
-	ghClient := github.NewClient(token)
+	ghClient := newGitHubClient(token, scutaDir)
 	inst := installer.New(ghClient, scutaDir)
 
 	start := time.Now()
@@ -446,4 +453,72 @@ func groupByDepth(toolNames []string, depths map[string]int) [][]string {
 	}
 
 	return result
+}
+
+// runInstallFromArchive handles offline installation from a local archive file.
+func runInstallFromArchive(ctx context.Context, args []string, archivePath string) error {
+	if len(args) != 1 {
+		output.Error("specify a tool name when using --from (e.g., scuta install pilum --from ./archive.tar.gz)")
+		return nil
+	}
+
+	toolName := args[0]
+
+	// Validate archive file exists
+	if _, err := os.Stat(archivePath); err != nil {
+		output.Error("archive file not found: %s", archivePath)
+		return nil
+	}
+
+	scutaDir, err := path.ScutaDir()
+	if err != nil {
+		return err
+	}
+
+	ghClient := github.NewClient("")
+	inst := installer.New(ghClient, scutaDir)
+
+	start := time.Now()
+	output.Info("Installing %s from %s...", toolName, archivePath)
+
+	result, err := inst.InstallFromArchive(toolName, archivePath)
+	if err != nil {
+		output.Error("Failed to install %s: %v", toolName, err)
+		return nil
+	}
+
+	// Update state
+	st, err := state.Load(scutaDir)
+	if err != nil {
+		return err
+	}
+
+	st.SetTool(toolName, state.ToolState{
+		Version:     result.Version,
+		InstalledAt: time.Now(),
+		BinaryPath:  result.BinaryPath,
+	})
+
+	if err := st.Save(scutaDir); err != nil {
+		output.Error("Failed to save state: %v", err)
+	}
+
+	// Record history
+	entry := history.NewEntry("install", true, time.Since(start), []history.ToolResult{
+		{
+			Name:     toolName,
+			Action:   "install",
+			Version:  result.Version,
+			Success:  true,
+			Duration: time.Since(start).Round(time.Millisecond).String(),
+		},
+	})
+	if err := history.Record(scutaDir, entry); err != nil {
+		output.Debugf("Failed to record history: %v", err)
+	}
+
+	_ = ctx // context not needed for local install but kept for signature consistency
+
+	output.Success("Installed %s %s (from local archive)", toolName, result.Version)
+	return nil
 }

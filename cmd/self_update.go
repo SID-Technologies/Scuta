@@ -45,7 +45,7 @@ func runSelfUpdate(cmd *cobra.Command, _ []string) error {
 	}
 
 	token := auth.ResolveTokenWithConfig(scutaDir)
-	ghClient := github.NewClient(token)
+	ghClient := newGitHubClient(token, scutaDir)
 	upd := updater.New(ghClient)
 
 	output.Info("Checking for updates...")

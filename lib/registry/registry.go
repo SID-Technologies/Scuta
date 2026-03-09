@@ -251,7 +251,12 @@ func (r *Registry) Source(name string) string {
 
 // fetchRemote downloads the registry from the remote URL.
 func fetchRemote() ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+		},
+	}
 
 	resp, err := client.Get(remoteURL()) //nolint:noctx // simple GET with timeout
 	if err != nil {

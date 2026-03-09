@@ -172,6 +172,109 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 	}, nil
 }
 
+// InstallFromArchive installs a tool from a local archive file (offline/air-gapped install).
+func (inst *Installer) InstallFromArchive(toolName string, archivePath string) (*InstallResult, error) {
+	// Validate the archive exists
+	if _, err := os.Stat(archivePath); err != nil {
+		return nil, errors.Wrap(err, "archive file not found")
+	}
+
+	// Extract archive to temp directory
+	tmpDir, err := os.MkdirTemp("", "scuta-offline-*")
+	if err != nil {
+		return nil, errors.Wrap(err, "creating temp directory")
+	}
+	defer os.RemoveAll(tmpDir)
+
+	extractDir := filepath.Join(tmpDir, "extracted")
+	if err := os.MkdirAll(extractDir, 0o755); err != nil {
+		return nil, errors.Wrap(err, "creating extract directory")
+	}
+
+	lowerName := strings.ToLower(archivePath)
+	if strings.HasSuffix(lowerName, ".tar.gz") || strings.HasSuffix(lowerName, ".tgz") {
+		if err := extractTarGz(archivePath, extractDir); err != nil {
+			return nil, errors.Wrap(err, "extracting tar.gz")
+		}
+	} else if strings.HasSuffix(lowerName, ".zip") {
+		if err := extractZip(archivePath, extractDir); err != nil {
+			return nil, errors.Wrap(err, "extracting zip")
+		}
+	} else {
+		return nil, errors.New("unsupported archive format: %s (expected .tar.gz, .tgz, or .zip)", filepath.Base(archivePath))
+	}
+
+	// Find the binary in extracted contents
+	binarySrc, err := findBinary(extractDir, toolName)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding binary in archive")
+	}
+
+	// Ensure bin directory exists
+	if err := os.MkdirAll(inst.binDir, 0o755); err != nil {
+		return nil, errors.Wrap(err, "creating bin directory")
+	}
+
+	// Atomic install: copy to temp, then rename
+	binaryPath := filepath.Join(inst.binDir, toolName)
+	tempPath := binaryPath + ".tmp"
+	if err := copyFile(binarySrc, tempPath); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "installing binary")
+	}
+
+	if err := os.Chmod(tempPath, 0o755); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "setting binary permissions")
+	}
+
+	if err := os.Rename(tempPath, binaryPath); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "atomic rename of binary")
+	}
+
+	// Try to parse version from filename, fallback to "local"
+	version := parseVersionFromFilename(filepath.Base(archivePath))
+
+	output.Debugf("Installed %s %s from archive to %s", toolName, version, binaryPath)
+
+	return &InstallResult{
+		Version:    version,
+		BinaryPath: binaryPath,
+	}, nil
+}
+
+// parseVersionFromFilename tries to extract a semver-like version from a filename.
+// Returns "local" if no version pattern is found.
+func parseVersionFromFilename(filename string) string {
+	// Remove known extensions
+	name := filename
+	for _, ext := range []string{".tar.gz", ".tgz", ".zip"} {
+		name = strings.TrimSuffix(name, ext)
+	}
+
+	// Look for version-like patterns (v1.2.3 or 1.2.3)
+	parts := strings.Split(name, "_")
+	for _, part := range parts {
+		cleaned := strings.TrimPrefix(part, "v")
+		// Simple check: contains dots and starts with a digit
+		if len(cleaned) > 0 && cleaned[0] >= '0' && cleaned[0] <= '9' && strings.Contains(cleaned, ".") {
+			return cleaned
+		}
+	}
+
+	// Also try with dash separator
+	parts = strings.Split(name, "-")
+	for _, part := range parts {
+		cleaned := strings.TrimPrefix(part, "v")
+		if len(cleaned) > 0 && cleaned[0] >= '0' && cleaned[0] <= '9' && strings.Contains(cleaned, ".") {
+			return cleaned
+		}
+	}
+
+	return "local"
+}
+
 // Uninstall removes a tool binary from the bin directory.
 func (inst *Installer) Uninstall(toolName string) error {
 	binaryPath := filepath.Join(inst.binDir, toolName)

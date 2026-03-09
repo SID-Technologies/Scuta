@@ -17,16 +17,29 @@ import (
 
 // Client provides access to GitHub Releases for downloading tool binaries.
 type Client struct {
-	token   string
-	baseURL string
+	token      string
+	baseURL    string
+	httpClient *http.Client
 }
 
 // NewClient creates a GitHub API client with an optional auth token.
+// The client respects HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment variables.
 func NewClient(token string) *Client {
 	return &Client{
 		token:   token,
 		baseURL: "https://api.github.com",
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+			},
+		},
 	}
+}
+
+// SetBaseURL overrides the GitHub API base URL for GitHub Enterprise support.
+// Example: https://github.example.com/api/v3
+func (c *Client) SetBaseURL(url string) {
+	c.baseURL = strings.TrimRight(url, "/")
 }
 
 // Release represents a GitHub release.
@@ -72,7 +85,7 @@ func (c *Client) fetchRelease(ctx context.Context, url string) (*Release, error)
 
 	c.addHeaders(req)
 
-	resp, err := doWithRetry(http.DefaultClient, req, defaultMaxAttempts)
+	resp, err := doWithRetry(c.httpClient, req, defaultMaxAttempts)
 	if err != nil {
 		return nil, errors.Wrap(err, "fetching release")
 	}
@@ -121,7 +134,7 @@ func (c *Client) DownloadChecksums(ctx context.Context, release *Release) (map[s
 	c.addHeaders(req)
 	req.Header.Set("Accept", "application/octet-stream")
 
-	resp, err := doWithRetry(http.DefaultClient, req, defaultMaxAttempts)
+	resp, err := doWithRetry(c.httpClient, req, defaultMaxAttempts)
 	if err != nil {
 		return nil, errors.Wrap(err, "downloading checksums")
 	}
@@ -172,7 +185,7 @@ func (c *Client) DownloadAsset(ctx context.Context, url string, dest string) err
 	c.addHeaders(req)
 	req.Header.Set("Accept", "application/octet-stream")
 
-	resp, err := doWithRetry(http.DefaultClient, req, defaultMaxAttempts)
+	resp, err := doWithRetry(c.httpClient, req, defaultMaxAttempts)
 	if err != nil {
 		return errors.Wrap(err, "downloading asset")
 	}

@@ -10,7 +10,6 @@ import (
 	"github.com/sid-technologies/scuta/lib/auth"
 	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/exitcodes"
-	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/state"
@@ -134,7 +133,7 @@ func checkForSelfUpdate() {
 
 	// Perform the check
 	token := auth.ResolveTokenWithConfig(scutaDir)
-	ghClient := github.NewClient(token)
+	ghClient := newGitHubClient(token, scutaDir)
 	upd := updater.New(ghClient)
 
 	update, err := upd.CheckSelfUpdate(context.Background(), version)

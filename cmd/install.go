@@ -16,6 +16,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/lock"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
+	"github.com/sid-technologies/scuta/lib/policy"
 	"github.com/sid-technologies/scuta/lib/registry"
 	"github.com/sid-technologies/scuta/lib/state"
 	"github.com/sid-technologies/scuta/lib/suggest"
@@ -107,6 +108,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Load policy (best-effort)
+	pol := loadPolicy(scutaDir)
+
 	// Acquire install lock
 	if err := lock.Acquire(scutaDir, "install", toolNames, forceFlag); err != nil {
 		return err
@@ -131,9 +135,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	if dryRunFlag {
 		toolResults, successCount = installDryRun(ctx, toolNames, reg, ghClient, versionFlag)
 	} else if allFlag && len(toolNames) > 1 {
-		toolResults, successCount = installParallel(ctx, toolNames, reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
+		toolResults, successCount = installParallel(ctx, toolNames, reg, inst, st, pol, versionFlag, forceFlag, skipVerifyFlag)
 	} else {
-		toolResults, successCount = installSequential(ctx, toolNames, reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
+		toolResults, successCount = installSequential(ctx, toolNames, reg, inst, st, pol, versionFlag, forceFlag, skipVerifyFlag)
 	}
 
 	// Skip state save and history if canceled or dry-run
@@ -220,6 +224,7 @@ func installSequential(
 	reg *registry.Registry,
 	inst *installer.Installer,
 	st *state.State,
+	pol *policy.Policy,
 	versionFlag string,
 	forceFlag bool,
 	skipVerifyFlag bool,
@@ -231,7 +236,7 @@ func installSequential(
 		if ctx.Err() != nil {
 			break
 		}
-		result := installOneTool(ctx, toolName, reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
+		result := installOneTool(ctx, toolName, reg, inst, st, pol, versionFlag, forceFlag, skipVerifyFlag)
 		toolResults = append(toolResults, result)
 		if result.Success {
 			successCount++
@@ -249,6 +254,7 @@ func installParallel(
 	reg *registry.Registry,
 	inst *installer.Installer,
 	st *state.State,
+	pol *policy.Policy,
 	versionFlag string,
 	forceFlag bool,
 	skipVerifyFlag bool,
@@ -269,7 +275,7 @@ func installParallel(
 
 		if len(group) == 1 {
 			// Single tool — no need for worker queue overhead
-			result := installOneTool(ctx, group[0], reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
+			result := installOneTool(ctx, group[0], reg, inst, st, pol, versionFlag, forceFlag, skipVerifyFlag)
 			allResults = append(allResults, result)
 			if result.Success {
 				totalSuccess++
@@ -279,7 +285,7 @@ func installParallel(
 
 		// Multiple tools at this depth — run in parallel
 		wq := workerqueue.NewWorkQueue(func(task *workerqueue.TaskInfo) bool {
-			result := installOneTool(ctx, task.ToolName, reg, inst, st, versionFlag, forceFlag, skipVerifyFlag)
+			result := installOneTool(ctx, task.ToolName, reg, inst, st, pol, versionFlag, forceFlag, skipVerifyFlag)
 			mu.Lock()
 			allResults = append(allResults, result)
 			if result.Success {
@@ -306,6 +312,7 @@ func installOneTool(
 	reg *registry.Registry,
 	inst *installer.Installer,
 	st *state.State,
+	pol *policy.Policy,
 	versionFlag string,
 	forceFlag bool,
 	skipVerifyFlag bool,
@@ -327,6 +334,20 @@ func installOneTool(
 		}
 	}
 
+	// Policy check for pinned version
+	if versionFlag != "" {
+		if v := pol.CheckToolVersion(toolName, versionFlag); v != nil {
+			output.Error("Policy violation for %s: %s", toolName, v.Message)
+			return history.ToolResult{
+				Name:     toolName,
+				Action:   "install",
+				Success:  false,
+				Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+				Error:    v.Message,
+			}
+		}
+	}
+
 	output.Info("Installing %s...", toolName)
 
 	result, err := inst.Install(ctx, toolName, tool.Repo, versionFlag, forceFlag, skipVerifyFlag)
@@ -338,6 +359,22 @@ func installOneTool(
 			Success:  false,
 			Duration: time.Since(toolStart).Round(time.Millisecond).String(),
 			Error:    err.Error(),
+		}
+	}
+
+	// Policy check for resolved version (when no specific version was requested)
+	if versionFlag == "" {
+		if v := pol.CheckToolVersion(toolName, result.Version); v != nil {
+			output.Error("Policy violation for %s: %s", toolName, v.Message)
+			// Remove the just-installed binary
+			_ = inst.Uninstall(toolName)
+			return history.ToolResult{
+				Name:     toolName,
+				Action:   "install",
+				Success:  false,
+				Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+				Error:    v.Message,
+			}
 		}
 	}
 

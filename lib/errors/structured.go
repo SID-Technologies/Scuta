@@ -22,6 +22,9 @@ func (s structured) StackTrace() pkgerrors.StackTrace {
 	}
 
 	trace := tracer.StackTrace()
+	if len(trace) <= 2 {
+		return trace
+	}
 
 	// Skip the first frame as this is always this package (can't skip it via pkgerrors API).
 	// Drop the last frame as that is always the runtime package.

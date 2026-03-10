@@ -16,7 +16,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const policyFile = "policy.yaml"
+const (
+	policyFile = "policy.yaml"
+
+	// maxResponseSize is the maximum allowed HTTP response body size (10 MB).
+	maxResponseSize = 10 * 1024 * 1024
+)
 
 // Policy defines version constraints and blocked versions for tools.
 type Policy struct {
@@ -89,7 +94,7 @@ func FetchRemote(url string) (*Policy, error) {
 		return nil, fmt.Errorf("remote policy returned %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, errors.Wrap(err, "reading remote policy response")
 	}

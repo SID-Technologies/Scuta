@@ -6,7 +6,6 @@ package output
 type ToolInfo struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
-	Repository  string   `json:"repository,omitempty"`
 	Repo        string   `json:"repo,omitempty"`
 	Source      string   `json:"source,omitempty"`
 	Status      string   `json:"status,omitempty"`

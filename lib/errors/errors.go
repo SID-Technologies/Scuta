@@ -6,8 +6,6 @@ package errors
 import (
 	"fmt"
 
-	"github.com/sid-technologies/scuta/lib/output"
-
 	pkgerrors "github.com/pkg/errors"
 )
 
@@ -17,7 +15,6 @@ import (
 //nolint:wrapcheck,inamedparam // This function does custom wrapping and errors.
 func New(msg string, attrs ...any) error {
 	formatted := fmt.Sprintf(msg, attrs...)
-	output.Error(formatted)
 	return structured{
 		err:   pkgerrors.New(formatted),
 		attrs: attrs,

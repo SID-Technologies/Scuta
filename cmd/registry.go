@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/registry"
@@ -96,8 +98,7 @@ func runRegistryAdd(cmd *cobra.Command, args []string) error {
 
 	// Check if tool already exists in local registry
 	if _, exists := local.Get(name); exists && !force {
-		output.Error("%q already exists in local registry (use --force to overwrite)", name)
-		return nil
+		return exitcodes.NewError(exitcodes.Config, fmt.Sprintf("%q already exists in local registry (use --force to overwrite)", name))
 	}
 
 	tool := registry.Tool{

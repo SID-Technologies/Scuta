@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/registry"
@@ -44,11 +45,9 @@ func runInfo(_ *cobra.Command, args []string) error {
 	if !ok {
 		suggestion := suggest.FormatSuggestion(toolName, reg.Names())
 		if suggestion != "" {
-			output.Error("unknown tool %q — %s", toolName, suggestion)
-		} else {
-			output.Error("unknown tool %q. Run 'scuta list' to see available tools", toolName)
+			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q — %s", toolName, suggestion))
 		}
-		return nil
+		return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q. Run 'scuta list' to see available tools", toolName))
 	}
 
 	scutaDir, err := path.ScutaDir()
@@ -68,7 +67,7 @@ func runInfo(_ *cobra.Command, args []string) error {
 	info := output.ToolInfo{
 		Name:        toolName,
 		Description: tool.Description,
-		Repository:  tool.Repo,
+		Repo:        tool.Repo,
 		Source:      source,
 		DependsOn:   tool.DependsOn,
 	}

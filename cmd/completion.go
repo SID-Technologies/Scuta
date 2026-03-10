@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/shellutil"
 
@@ -93,8 +94,7 @@ func installCompletions(shell string) error {
 	case "fish":
 		return installFishCompletions()
 	default:
-		output.Error("unsupported shell %q (use bash, zsh, or fish)", shell)
-		return nil
+		return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unsupported shell %q (use bash, zsh, or fish)", shell))
 	}
 }
 

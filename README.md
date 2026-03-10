@@ -59,11 +59,14 @@ scuta update
 |---------|-------------|
 | `scuta init` | Setup ~/.scuta/, detect auth, configure PATH |
 | `scuta install <tool>` | Install a tool from the registry |
+| `scuta install <tool> --from <archive>` | Install from a local archive (offline) |
 | `scuta install --all` | Install all tools |
 | `scuta uninstall <tool>` | Remove a tool |
 | `scuta update [tool]` | Update one or all tools |
 | `scuta list` | Show all tools + versions + install status |
+| `scuta info <tool>` | Show detailed information about a tool |
 | `scuta doctor` | Health check (PATH, binaries, state) |
+| `scuta history` | Show install/update history |
 | `scuta self-update` | Update Scuta itself |
 | `scuta version` | Print version |
 
@@ -76,7 +79,7 @@ scuta update
 | `scuta config set <key> <value>` | Set a config value |
 | `scuta config reset <key>` | Reset a config value to its default |
 
-Valid config keys: `update_interval`, `github_token`, `registry_url`
+Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`
 
 ### Registry
 

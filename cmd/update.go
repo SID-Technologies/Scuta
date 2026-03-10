@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"fmt"
+	"sort"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
+	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/helper"
 	"github.com/sid-technologies/scuta/lib/history"
 	"github.com/sid-technologies/scuta/lib/installer"
@@ -74,17 +77,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		if _, ok := reg.Get(toolName); !ok {
 			suggestion := suggest.FormatSuggestion(toolName, reg.Names())
 			if suggestion != "" {
-				output.Error("unknown tool %q — %s", toolName, suggestion)
-			} else {
-				output.Error("unknown tool %q. Run 'scuta list' to see available tools", toolName)
+				return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q — %s", toolName, suggestion))
 			}
-			return nil
+			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q. Run 'scuta list' to see available tools", toolName))
 		}
 
 		// Check if it's installed
 		if _, installed := st.GetTool(toolName); !installed {
-			output.Error("%s is not installed. Run 'scuta install %s' first", toolName, toolName)
-			return nil
+			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("%s is not installed. Run 'scuta install %s' first", toolName, toolName))
 		}
 
 		toolNames = []string{toolName}
@@ -95,6 +95,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 				toolNames = append(toolNames, name)
 			}
 		}
+		sort.Strings(toolNames)
 		if len(toolNames) == 0 {
 			output.Info("No tools installed. Run 'scuta install --all' first")
 			return nil

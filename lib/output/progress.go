@@ -85,6 +85,10 @@ func (p *ProgressBar) Complete(message string) {
 
 // render updates the progress bar display.
 func (p *ProgressBar) render() {
+	if p.total == 0 {
+		return
+	}
+
 	if p.ciMode {
 		percent := float64(p.current) / float64(p.total) * 100
 		fmt.Printf("  Progress: %d/%d (%.0f%%) %s\n", p.current, p.total, percent, p.message)

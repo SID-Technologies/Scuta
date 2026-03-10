@@ -28,6 +28,9 @@ const (
 
 	// cacheTTL is how long the cached registry is considered fresh.
 	cacheTTL = 1 * time.Hour
+
+	// maxResponseSize is the maximum allowed HTTP response body size (10 MB).
+	maxResponseSize = 10 * 1024 * 1024
 )
 
 // Source identifies where a tool definition came from.
@@ -268,7 +271,7 @@ func fetchRemote() ([]byte, error) {
 		return nil, fmt.Errorf("remote registry returned %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, err
 	}

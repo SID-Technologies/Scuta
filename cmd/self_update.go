@@ -4,6 +4,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/auth"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/installer"
+	"github.com/sid-technologies/scuta/lib/lock"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/updater"
@@ -59,6 +60,12 @@ func runSelfUpdate(cmd *cobra.Command, _ []string) error {
 	}
 
 	output.Info("Update available: %s → %s", update.CurrentVersion, update.LatestVersion)
+
+	// Acquire lock before installing
+	if err := lock.Acquire(scutaDir, "self-update", []string{"scuta"}, false); err != nil {
+		return err
+	}
+	defer lock.Release(scutaDir)
 
 	// Download and install new binary
 	inst := installer.New(ghClient, scutaDir)

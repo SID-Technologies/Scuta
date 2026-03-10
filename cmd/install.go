@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
+	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/graph"
 	"github.com/sid-technologies/scuta/lib/helper"
@@ -79,16 +81,13 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		if _, ok := reg.Get(toolName); !ok {
 			suggestion := suggest.FormatSuggestion(toolName, reg.Names())
 			if suggestion != "" {
-				output.Error("unknown tool %q — %s", toolName, suggestion)
-			} else {
-				output.Error("unknown tool %q. Run 'scuta list' to see available tools", toolName)
+				return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q — %s", toolName, suggestion))
 			}
-			return nil
+			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q. Run 'scuta list' to see available tools", toolName))
 		}
 		toolNames = []string{toolName}
 	} else {
-		output.Error("specify a tool name or use --all")
-		return nil
+		return exitcodes.NewError(exitcodes.InvalidArgs, "specify a tool name or use --all")
 	}
 
 	// Sort by dependency order using the graph
@@ -486,16 +485,14 @@ func groupByDepth(toolNames []string, depths map[string]int) [][]string {
 // runInstallFromArchive handles offline installation from a local archive file.
 func runInstallFromArchive(ctx context.Context, args []string, archivePath string) error {
 	if len(args) != 1 {
-		output.Error("specify a tool name when using --from (e.g., scuta install pilum --from ./archive.tar.gz)")
-		return nil
+		return exitcodes.NewError(exitcodes.InvalidArgs, "specify a tool name when using --from (e.g., scuta install pilum --from ./archive.tar.gz)")
 	}
 
 	toolName := args[0]
 
 	// Validate archive file exists
 	if _, err := os.Stat(archivePath); err != nil {
-		output.Error("archive file not found: %s", archivePath)
-		return nil
+		return exitcodes.NewError(exitcodes.IO, fmt.Sprintf("archive file not found: %s", archivePath))
 	}
 
 	scutaDir, err := path.ScutaDir()
@@ -511,8 +508,7 @@ func runInstallFromArchive(ctx context.Context, args []string, archivePath strin
 
 	result, err := inst.InstallFromArchive(toolName, archivePath)
 	if err != nil {
-		output.Error("Failed to install %s: %v", toolName, err)
-		return nil
+		return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("failed to install %s: %v", toolName, err))
 	}
 
 	// Update state

@@ -36,7 +36,6 @@ A unified CLI that manages SID's developer tools. Engineers install Scuta once, 
 - **Errors**: Use `lib/errors.Wrap()` — never `fmt.Errorf`
 - **Output**: Use `lib/output` — never `fmt.Print*` or `log`
 - **Exit codes**: Use `lib/exitcodes` constants
-- **Flags**: Use `lib/flags` for argument parsing helpers
 - **Style**: Exit early, no else blocks, no one-line error checks
 - **Linting**: `make lint` runs pre-commit + golangci-lint
 - **Testing**: `make test` runs all tests with race detector

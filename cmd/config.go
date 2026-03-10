@@ -142,16 +142,17 @@ func runConfigGet(_ *cobra.Command, args []string) error {
 	}
 
 	value := cfg.FieldMap()[key]
+	masked := config.MaskValue(key, value)
 
 	if output.IsJSON() {
 		output.JSON(map[string]string{
 			"key":   key,
-			"value": value,
+			"value": masked,
 		})
 		return nil
 	}
 
-	fmt.Println(value)
+	fmt.Println(masked)
 	return nil
 }
 
@@ -185,7 +186,7 @@ func runConfigSet(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	output.Success("Set %s = %s", key, value)
+	output.Success("Set %s = %s", key, config.MaskValue(key, value))
 	return nil
 }
 

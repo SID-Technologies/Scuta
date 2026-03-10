@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/history"
 	"github.com/sid-technologies/scuta/lib/installer"
@@ -66,6 +68,7 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		for name := range st.Tools {
 			toolNames = append(toolNames, name)
 		}
+		sort.Strings(toolNames)
 		if len(toolNames) == 0 {
 			output.Info("No tools installed")
 			return nil
@@ -73,8 +76,7 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	case len(args) == 1:
 		toolNames = []string{args[0]}
 	default:
-		output.Error("specify a tool name or use --all")
-		return nil
+		return exitcodes.NewError(exitcodes.InvalidArgs, "specify a tool name or use --all")
 	}
 
 	// Validate tool names against registry for single-tool uninstall
@@ -88,11 +90,9 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		if _, ok := reg.Get(toolName); !ok {
 			suggestion := suggest.FormatSuggestion(toolName, reg.Names())
 			if suggestion != "" {
-				output.Error("unknown tool %q — %s", toolName, suggestion)
-			} else {
-				output.Error("unknown tool %q. Run 'scuta list' to see available tools", toolName)
+				return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q — %s", toolName, suggestion))
 			}
-			return nil
+			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q. Run 'scuta list' to see available tools", toolName))
 		}
 
 		ts, installed := st.GetTool(toolName)

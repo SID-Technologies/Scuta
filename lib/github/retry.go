@@ -1,6 +1,7 @@
 package github
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -58,7 +59,7 @@ func doWithRetry(client *http.Client, req *http.Request, maxAttempts int) (*http
 
 	// All attempts failed
 	if lastResp != nil {
-		return lastResp, lastErr
+		return nil, fmt.Errorf("request failed after %d attempts (last status: %d)", maxAttempts, lastResp.StatusCode)
 	}
 	return nil, lastErr
 }

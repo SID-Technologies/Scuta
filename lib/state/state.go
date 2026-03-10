@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/errors"
@@ -26,6 +27,7 @@ const CurrentStateVersion = 1
 
 // State represents the full Scuta state file.
 type State struct {
+	mu              sync.RWMutex
 	Version         int                  `json:"version,omitempty"`
 	LastUpdateCheck time.Time            `json:"last_update_check"`
 	Tools           map[string]ToolState `json:"tools"`
@@ -76,6 +78,9 @@ func Load(scutaDir string) (*State, error) {
 
 // Save writes the state to disk.
 func (s *State) Save(scutaDir string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if err := os.MkdirAll(scutaDir, 0o700); err != nil {
 		return errors.Wrap(err, "creating scuta directory")
 	}
@@ -95,16 +100,22 @@ func (s *State) Save(scutaDir string) error {
 
 // SetTool records a tool's installed state.
 func (s *State) SetTool(name string, ts ToolState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Tools[name] = ts
 }
 
 // RemoveTool removes a tool from the state.
 func (s *State) RemoveTool(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.Tools, name)
 }
 
 // GetTool returns a tool's state, or false if not installed.
 func (s *State) GetTool(name string) (ToolState, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	ts, ok := s.Tools[name]
 	return ts, ok
 }

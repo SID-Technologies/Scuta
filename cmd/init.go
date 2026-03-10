@@ -77,16 +77,16 @@ func runInit(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	shell := shellutil.DetectShell()
+
 	if shellutil.IsInPath(binDir) {
 		output.Success("%s is in PATH", binDir)
 	} else {
 		output.Warning("%s is not in PATH", binDir)
-		shell := shellutil.DetectShell()
 		shellutil.PrintPathInstructions(binDir, shell)
 	}
 
 	// 5. Install shell completions (only prompt on first init)
-	shell := shellutil.DetectShell()
 	if completionsInstalled(shell) {
 		output.Success("Shell completions already installed")
 	} else if shell != "sh" {

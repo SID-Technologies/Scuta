@@ -1,13 +1,10 @@
 package cmd
 
 import (
-	"context"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
+	"github.com/sid-technologies/scuta/lib/helper"
 	"github.com/sid-technologies/scuta/lib/history"
 	"github.com/sid-technologies/scuta/lib/installer"
 	"github.com/sid-technologies/scuta/lib/lock"
@@ -43,16 +40,8 @@ func init() {
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithCancel(cmd.Context())
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		output.Warning("\nInterrupted, cleaning up...")
-		cancel()
-	}()
-	defer signal.Stop(sigChan)
-	defer cancel()
+	ctx, cleanup := helper.WithSignalCancel(cmd.Context())
+	defer cleanup()
 
 	skipVerifyFlag, _ := cmd.Flags().GetBool("skip-verify")
 	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")

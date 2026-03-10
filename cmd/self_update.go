@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"os"
-
 	"github.com/sid-technologies/scuta/lib/auth"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/installer"
@@ -70,25 +68,7 @@ func runSelfUpdate(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Replace current binary
-	currentExe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-
-	// Write to .new, then rename over the original
-	newPath := currentExe + ".new"
-	data, err := os.ReadFile(result.BinaryPath)
-	if err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(newPath, data, 0o755); err != nil {
-		return err
-	}
-
-	if err := os.Rename(newPath, currentExe); err != nil {
-		// Clean up the .new file if rename fails
-		os.Remove(newPath)
+	if err := updater.ReplaceBinary(result.BinaryPath); err != nil {
 		return err
 	}
 

@@ -180,17 +180,10 @@ func listLocalRegistry() error {
 	}
 
 	if output.IsJSON() {
-		type toolInfo struct {
-			Name        string   `json:"name"`
-			Description string   `json:"description"`
-			Repo        string   `json:"repo"`
-			DependsOn   []string `json:"depends_on,omitempty"`
-		}
-
-		var tools []toolInfo
+		var tools []output.ToolInfo
 		for _, name := range names {
 			tool, _ := local.Get(name)
-			tools = append(tools, toolInfo{
+			tools = append(tools, output.ToolInfo{
 				Name:        name,
 				Description: tool.Description,
 				Repo:        tool.Repo,
@@ -226,18 +219,10 @@ func listMergedRegistry() error {
 	sort.Strings(names)
 
 	if output.IsJSON() {
-		type toolInfo struct {
-			Name        string   `json:"name"`
-			Description string   `json:"description"`
-			Repo        string   `json:"repo"`
-			Source      string   `json:"source"`
-			DependsOn   []string `json:"depends_on,omitempty"`
-		}
-
-		var tools []toolInfo
+		var tools []output.ToolInfo
 		for _, name := range names {
 			tool, _ := reg.Get(name)
-			tools = append(tools, toolInfo{
+			tools = append(tools, output.ToolInfo{
 				Name:        name,
 				Description: tool.Description,
 				Repo:        tool.Repo,

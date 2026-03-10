@@ -49,21 +49,12 @@ func runList(_ *cobra.Command, _ []string) error {
 
 	// JSON output mode
 	if output.IsJSON() {
-		type toolInfo struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			Repo        string `json:"repo"`
-			Installed   string `json:"installed"`
-			Status      string `json:"status"`
-			Source      string `json:"source"`
-		}
-
-		var tools []toolInfo
+		var tools []output.ToolInfo
 		for _, name := range names {
 			tool, _ := reg.Get(name)
 			ts, installed := st.GetTool(name)
 
-			info := toolInfo{
+			info := output.ToolInfo{
 				Name:        name,
 				Description: tool.Description,
 				Repo:        tool.Repo,

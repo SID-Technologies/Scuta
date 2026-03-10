@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/sid-technologies/scuta/lib/auth"
 	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/prompt"
+	"github.com/sid-technologies/scuta/lib/shellutil"
 
 	"github.com/spf13/cobra"
 )
@@ -46,17 +46,21 @@ func runInit(_ *cobra.Command, _ []string) error {
 
 	// 2. Configure registry and write config
 	configPath := scutaDir + "/config.yaml"
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		cfg, err := promptInitialConfig()
-		if err != nil {
-			return err
+	_, statErr := os.Stat(configPath)
+
+	if statErr == nil {
+		output.Success("Config already exists")
+	}
+
+	if os.IsNotExist(statErr) {
+		cfg, cfgErr := promptInitialConfig()
+		if cfgErr != nil {
+			return cfgErr
 		}
-		if err := config.Save(scutaDir, cfg); err != nil {
-			return err
+		if cfgErr = config.Save(scutaDir, cfg); cfgErr != nil {
+			return cfgErr
 		}
 		output.Success("Created config")
-	} else {
-		output.Success("Config already exists")
 	}
 
 	// 3. Detect GitHub auth
@@ -73,17 +77,19 @@ func runInit(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	if isInPath(binDir) {
+	if shellutil.IsInPath(binDir) {
 		output.Success("%s is in PATH", binDir)
 	} else {
 		output.Warning("%s is not in PATH", binDir)
-		shell := detectShell()
-		printPathInstructions(binDir, shell)
+		shell := shellutil.DetectShell()
+		shellutil.PrintPathInstructions(binDir, shell)
 	}
 
 	// 5. Install shell completions (only prompt on first init)
-	shell := detectShell()
-	if shell != "sh" && !completionsInstalled(shell) {
+	shell := shellutil.DetectShell()
+	if completionsInstalled(shell) {
+		output.Success("Shell completions already installed")
+	} else if shell != "sh" {
 		reader := prompt.NewReader(bufio.NewReader(os.Stdin))
 		answer, err := reader.Ask("Install shell completions? (Y/n)", "Y")
 		if err == nil && (answer == "Y" || answer == "y" || answer == "yes" || answer == "") {
@@ -91,8 +97,6 @@ func runInit(_ *cobra.Command, _ []string) error {
 				output.Warning("Failed to install completions: %v", err)
 			}
 		}
-	} else if completionsInstalled(shell) {
-		output.Success("Shell completions already installed")
 	}
 
 	// 6. Print next steps
@@ -103,52 +107,6 @@ func runInit(_ *cobra.Command, _ []string) error {
 	fmt.Println()
 
 	return nil
-}
-
-// isInPath checks if the given directory is in the system PATH.
-func isInPath(dir string) bool {
-	pathEnv := os.Getenv("PATH")
-	for _, p := range strings.Split(pathEnv, string(os.PathListSeparator)) {
-		if p == dir {
-			return true
-		}
-	}
-	return false
-}
-
-// detectShell returns the current shell name.
-func detectShell() string {
-	shell := os.Getenv("SHELL")
-	if strings.Contains(shell, "zsh") {
-		return "zsh"
-	}
-	if strings.Contains(shell, "bash") {
-		return "bash"
-	}
-	if strings.Contains(shell, "fish") {
-		return "fish"
-	}
-	return "sh"
-}
-
-// printPathInstructions prints shell-specific PATH setup instructions.
-func printPathInstructions(binDir string, shell string) {
-	fmt.Println()
-	switch shell {
-	case "zsh":
-		output.Info("Add to ~/.zshrc:")
-		fmt.Printf("  export PATH=\"%s:$PATH\"\n", binDir)
-	case "bash":
-		output.Info("Add to ~/.bashrc:")
-		fmt.Printf("  export PATH=\"%s:$PATH\"\n", binDir)
-	case "fish":
-		output.Info("Add to ~/.config/fish/config.fish:")
-		fmt.Printf("  set -gx PATH %s $PATH\n", binDir)
-	default:
-		output.Info("Add to your shell profile:")
-		fmt.Printf("  export PATH=\"%s:$PATH\"\n", binDir)
-	}
-	fmt.Println()
 }
 
 // promptInitialConfig runs an interactive setup to build the initial config.

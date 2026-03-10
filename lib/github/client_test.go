@@ -149,3 +149,52 @@ func TestNewClient(t *testing.T) {
 		t.Errorf("expected empty token, got %q", client2.token)
 	}
 }
+
+func TestValidateDownloadURL(t *testing.T) {
+	client := NewClient("")
+
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"github release", "https://github.com/owner/repo/releases/download/v1.0/tool.tar.gz", false},
+		{"github objects", "https://objects.githubusercontent.com/github-production-release-asset/12345", false},
+		{"github subdomain", "https://api.github.com/repos/owner/repo", false},
+		{"evil host", "https://evil.com/tool.tar.gz", true},
+		{"http not https", "http://github.com/owner/repo/releases/download/v1.0/tool.tar.gz", true},
+		{"ftp scheme", "ftp://github.com/file", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := client.validateDownloadURL(tt.url)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateDownloadURL(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateDownloadURLGitHubEnterprise(t *testing.T) {
+	client := NewClient("")
+	client.SetBaseURL("https://github.example.com/api/v3")
+
+	// Should accept downloads from the enterprise host
+	err := client.validateDownloadURL("https://github.example.com/owner/repo/releases/download/v1.0/tool.tar.gz")
+	if err != nil {
+		t.Errorf("expected enterprise URL to be valid, got: %v", err)
+	}
+
+	// Should still accept standard github.com
+	err = client.validateDownloadURL("https://github.com/owner/repo/releases/download/v1.0/tool.tar.gz")
+	if err != nil {
+		t.Errorf("expected github.com to be valid, got: %v", err)
+	}
+
+	// Should reject other hosts
+	err = client.validateDownloadURL("https://evil.com/tool.tar.gz")
+	if err == nil {
+		t.Error("expected error for evil host, got nil")
+	}
+}

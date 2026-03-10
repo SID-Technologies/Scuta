@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/sid-technologies/scuta/lib/output"
+	"github.com/sid-technologies/scuta/lib/shellutil"
 
 	"github.com/spf13/cobra"
 )
@@ -76,7 +77,7 @@ func runCompletionInstall(cmd *cobra.Command, _ []string) error {
 
 	shell := shellFlag
 	if shell == "" {
-		shell = detectShell()
+		shell = shellutil.DetectShell()
 	}
 
 	return installCompletions(shell)

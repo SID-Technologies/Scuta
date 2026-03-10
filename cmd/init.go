@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/sid-technologies/scuta/lib/auth"
 	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/prompt"
+	"github.com/sid-technologies/scuta/lib/shellutil"
 
 	"github.com/spf13/cobra"
 )
@@ -73,16 +73,16 @@ func runInit(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	if isInPath(binDir) {
+	if shellutil.IsInPath(binDir) {
 		output.Success("%s is in PATH", binDir)
 	} else {
 		output.Warning("%s is not in PATH", binDir)
-		shell := detectShell()
-		printPathInstructions(binDir, shell)
+		shell := shellutil.DetectShell()
+		shellutil.PrintPathInstructions(binDir, shell)
 	}
 
 	// 5. Install shell completions (only prompt on first init)
-	shell := detectShell()
+	shell := shellutil.DetectShell()
 	if shell != "sh" && !completionsInstalled(shell) {
 		reader := prompt.NewReader(bufio.NewReader(os.Stdin))
 		answer, err := reader.Ask("Install shell completions? (Y/n)", "Y")
@@ -103,52 +103,6 @@ func runInit(_ *cobra.Command, _ []string) error {
 	fmt.Println()
 
 	return nil
-}
-
-// isInPath checks if the given directory is in the system PATH.
-func isInPath(dir string) bool {
-	pathEnv := os.Getenv("PATH")
-	for _, p := range strings.Split(pathEnv, string(os.PathListSeparator)) {
-		if p == dir {
-			return true
-		}
-	}
-	return false
-}
-
-// detectShell returns the current shell name.
-func detectShell() string {
-	shell := os.Getenv("SHELL")
-	if strings.Contains(shell, "zsh") {
-		return "zsh"
-	}
-	if strings.Contains(shell, "bash") {
-		return "bash"
-	}
-	if strings.Contains(shell, "fish") {
-		return "fish"
-	}
-	return "sh"
-}
-
-// printPathInstructions prints shell-specific PATH setup instructions.
-func printPathInstructions(binDir string, shell string) {
-	fmt.Println()
-	switch shell {
-	case "zsh":
-		output.Info("Add to ~/.zshrc:")
-		fmt.Printf("  export PATH=\"%s:$PATH\"\n", binDir)
-	case "bash":
-		output.Info("Add to ~/.bashrc:")
-		fmt.Printf("  export PATH=\"%s:$PATH\"\n", binDir)
-	case "fish":
-		output.Info("Add to ~/.config/fish/config.fish:")
-		fmt.Printf("  set -gx PATH %s $PATH\n", binDir)
-	default:
-		output.Info("Add to your shell profile:")
-		fmt.Printf("  export PATH=\"%s:$PATH\"\n", binDir)
-	}
-	fmt.Println()
 }
 
 // promptInitialConfig runs an interactive setup to build the initial config.

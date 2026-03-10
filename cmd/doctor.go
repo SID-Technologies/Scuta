@@ -8,6 +8,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/registry"
+	"github.com/sid-technologies/scuta/lib/shellutil"
 	"github.com/sid-technologies/scuta/lib/state"
 
 	"github.com/spf13/cobra"
@@ -56,7 +57,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	}
 
 	// 2. Check ~/.scuta/bin/ is in PATH
-	if binDir != "" && isInPath(binDir) {
+	if binDir != "" && shellutil.IsInPath(binDir) {
 		output.PrintCheck(true, "~/.scuta/bin/ is in PATH")
 	} else {
 		output.PrintCheckWarn("~/.scuta/bin/ is not in PATH")

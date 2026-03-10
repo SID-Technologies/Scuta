@@ -1,7 +1,9 @@
 package config
 
 import (
+	"net"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/errors"
@@ -18,13 +20,53 @@ func ValidateValue(key, value string) error {
 		if value == "local" {
 			break
 		}
-		u, err := url.Parse(value)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return errors.New("invalid URL for registry_url: %q (must include scheme and host, or \"local\")", value)
+		if err := validateURL(key, value); err != nil {
+			return err
+		}
+	case "github_base_url", "policy_url":
+		if value == "" {
+			break
+		}
+		if err := validateURL(key, value); err != nil {
+			return err
 		}
 	default:
 		// No validation for other keys (e.g. github_token)
 	}
+	return nil
+}
+
+// validateURL validates that a URL is safe: HTTPS-only, no loopback, no private IPs.
+func validateURL(key, value string) error {
+	u, err := url.Parse(value)
+	if err != nil {
+		return errors.New("invalid URL for %s: %q", key, value)
+	}
+
+	if u.Scheme != "https" {
+		return errors.New("invalid URL for %s: %q (only https is allowed)", key, value)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("invalid URL for %s: %q (missing host)", key, value)
+	}
+
+	// Check for loopback and private IPs
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return errors.New("invalid URL for %s: %q (loopback addresses are not allowed)", key, value)
+		}
+		if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			return errors.New("invalid URL for %s: %q (private/link-local addresses are not allowed)", key, value)
+		}
+	}
+
+	// Also catch "localhost" by name
+	if strings.EqualFold(host, "localhost") {
+		return errors.New("invalid URL for %s: %q (localhost is not allowed)", key, value)
+	}
+
 	return nil
 }
 

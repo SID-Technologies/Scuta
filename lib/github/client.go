@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -14,6 +15,9 @@ import (
 	"github.com/sid-technologies/scuta/lib/errors"
 	"github.com/sid-technologies/scuta/lib/output"
 )
+
+// maxResponseSize is the maximum allowed HTTP response body size (10 MB).
+const maxResponseSize = 10 * 1024 * 1024
 
 // Client provides access to GitHub Releases for downloading tool binaries.
 type Client struct {
@@ -99,6 +103,10 @@ func (c *Client) fetchRelease(ctx context.Context, url string) (*Release, error)
 		return nil, errors.New("GitHub API returned %d for %s", resp.StatusCode, url)
 	}
 
+	if err := validateJSONContentType(resp); err != nil {
+		return nil, errors.Wrap(err, "unexpected response from %s", url)
+	}
+
 	var release Release
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return nil, errors.Wrap(err, "parsing release JSON")
@@ -144,7 +152,7 @@ func (c *Client) DownloadChecksums(ctx context.Context, release *Release) (map[s
 		return nil, errors.New("checksums download failed with status %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, errors.Wrap(err, "reading checksums")
 	}
@@ -175,6 +183,10 @@ func (c *Client) DownloadChecksums(ctx context.Context, release *Release) (map[s
 
 // DownloadAsset downloads a release asset to the given destination path.
 func (c *Client) DownloadAsset(ctx context.Context, url string, dest string) error {
+	if err := c.validateDownloadURL(url); err != nil {
+		return err
+	}
+
 	output.Debugf("Downloading asset: %s → %s", url, dest)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -324,4 +336,57 @@ func NormalizeVersion(tag string) string {
 // VersionFromTag extracts and normalizes a version from a git tag.
 func VersionFromTag(tag string) string {
 	return NormalizeVersion(tag)
+}
+
+// validateJSONContentType checks that an HTTP response has a JSON Content-Type.
+func validateJSONContentType(resp *http.Response) error {
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		return errors.New("response has no Content-Type header (expected application/json)")
+	}
+	if !strings.Contains(strings.ToLower(ct), "application/json") {
+		return errors.New("unexpected Content-Type %q (expected application/json)", ct)
+	}
+	return nil
+}
+
+// allowedDownloadHosts are the GitHub hosts that are trusted for asset downloads.
+var allowedDownloadHosts = []string{
+	"github.com",
+	"objects.githubusercontent.com",
+}
+
+// validateDownloadURL checks that a download URL uses HTTPS and points to a
+// trusted GitHub host (or the configured GitHub Enterprise base URL).
+func (c *Client) validateDownloadURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return errors.New("invalid download URL: %s", rawURL)
+	}
+
+	if u.Scheme != "https" {
+		return errors.New("download URL must use HTTPS: %s", rawURL)
+	}
+
+	host := strings.ToLower(u.Hostname())
+
+	// Check against allowed GitHub hosts
+	for _, allowed := range allowedDownloadHosts {
+		if host == allowed || strings.HasSuffix(host, "."+allowed) {
+			return nil
+		}
+	}
+
+	// Check against configured GitHub Enterprise base URL
+	if c.baseURL != "" && c.baseURL != "https://api.github.com" {
+		baseU, parseErr := url.Parse(c.baseURL)
+		if parseErr == nil {
+			baseHost := strings.ToLower(baseU.Hostname())
+			if host == baseHost || strings.HasSuffix(host, "."+baseHost) {
+				return nil
+			}
+		}
+	}
+
+	return errors.New("download URL host %q is not a trusted GitHub host", host)
 }

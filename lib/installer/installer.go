@@ -41,6 +41,10 @@ func New(ghClient *github.Client, scutaDir string) *Installer {
 
 // Install downloads and installs a tool binary from GitHub Releases.
 func (inst *Installer) Install(ctx context.Context, toolName string, repo string, targetVersion string, force bool, skipVerify bool) (*InstallResult, error) {
+	if err := validateToolName(toolName); err != nil {
+		return nil, err
+	}
+
 	// Check for cancellation before starting
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -89,23 +93,25 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 		return nil, errors.Wrap(err, "downloading %s", asset.Name)
 	}
 
-	// Checksum verification
+	// Checksum verification (fail-closed: any failure is an error unless --skip-verify)
 	if skipVerify {
 		output.Warning("Skipping checksum verification (--skip-verify)")
 	} else {
 		checksums, csErr := inst.github.DownloadChecksums(ctx, release)
 		if csErr != nil {
-			output.Warning("Failed to download checksums: %v", csErr)
-		} else if checksums == nil {
-			output.Warning("No checksums.txt in release, skipping verification")
-		} else if expectedHash, ok := checksums[asset.Name]; ok {
-			if err := VerifyChecksum(archivePath, expectedHash); err != nil {
-				return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
-			}
-			output.Debugf("Checksum verified for %s", asset.Name)
-		} else {
-			output.Warning("No checksum found for %s in checksums.txt", asset.Name)
+			return nil, errors.Wrap(csErr, "checksum verification failed for %s: could not download checksums", toolName)
 		}
+		if checksums == nil {
+			return nil, errors.New("checksum verification failed for %s: no checksums file in release (use --skip-verify to override)", toolName)
+		}
+		expectedHash, ok := checksums[asset.Name]
+		if !ok {
+			return nil, errors.New("checksum verification failed for %s: no entry for %s in checksums file (use --skip-verify to override)", toolName, asset.Name)
+		}
+		if err := VerifyChecksum(archivePath, expectedHash); err != nil {
+			return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
+		}
+		output.Debugf("Checksum verified for %s", asset.Name)
 	}
 
 	// Check for cancellation before extraction
@@ -143,7 +149,7 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 	}
 
 	// Ensure bin directory exists
-	if err := os.MkdirAll(inst.binDir, 0o755); err != nil {
+	if err := os.MkdirAll(inst.binDir, 0o700); err != nil {
 		return nil, errors.Wrap(err, "creating bin directory")
 	}
 
@@ -211,7 +217,7 @@ func (inst *Installer) InstallFromArchive(toolName string, archivePath string) (
 	}
 
 	// Ensure bin directory exists
-	if err := os.MkdirAll(inst.binDir, 0o755); err != nil {
+	if err := os.MkdirAll(inst.binDir, 0o700); err != nil {
 		return nil, errors.Wrap(err, "creating bin directory")
 	}
 
@@ -277,6 +283,10 @@ func parseVersionFromFilename(filename string) string {
 
 // Uninstall removes a tool binary from the bin directory.
 func (inst *Installer) Uninstall(toolName string) error {
+	if err := validateToolName(toolName); err != nil {
+		return err
+	}
+
 	binaryPath := filepath.Join(inst.binDir, toolName)
 
 	if err := os.Remove(binaryPath); err != nil {
@@ -289,6 +299,9 @@ func (inst *Installer) Uninstall(toolName string) error {
 	output.Debugf("Removed %s from %s", toolName, binaryPath)
 	return nil
 }
+
+// maxFileSize is the maximum allowed size for a single extracted file (100 MB).
+const maxFileSize = 100 * 1024 * 1024
 
 // extractTarGz extracts a .tar.gz archive to the destination directory.
 func extractTarGz(src string, dest string) error {
@@ -315,11 +328,17 @@ func extractTarGz(src string, dest string) error {
 			return errors.Wrap(err, "reading tar entry")
 		}
 
-		// Prevent path traversal
-		target := filepath.Join(dest, filepath.Clean(header.Name))
-		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
-			continue
+		// Reject symlinks and hard links
+		if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeLink {
+			return errors.New("archive contains a symlink or hard link: %s (rejected for security)", header.Name)
 		}
+
+		// Prevent path traversal
+		if !isSafePath(dest, header.Name) {
+			return errors.New("archive contains path traversal: %s", header.Name)
+		}
+
+		target := filepath.Join(dest, filepath.Clean(header.Name))
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -337,14 +356,13 @@ func extractTarGz(src string, dest string) error {
 				return errors.Wrap(err, "creating file %s", target)
 			}
 
-			//nolint:gosec // Size is bounded by GitHub's asset limits
-			if _, err := io.Copy(outFile, tr); err != nil {
+			if _, err := io.Copy(outFile, io.LimitReader(tr, maxFileSize)); err != nil {
 				outFile.Close()
 				return errors.Wrap(err, "writing file %s", target)
 			}
 			outFile.Close()
 		default:
-			// Skip unsupported entry types (symlinks, etc.)
+			// Skip other entry types
 		}
 	}
 
@@ -360,11 +378,17 @@ func extractZip(src string, dest string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
-		// Prevent path traversal
-		target := filepath.Join(dest, filepath.Clean(f.Name))
-		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
-			continue
+		// Reject symlinks
+		if f.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return errors.New("archive contains a symlink: %s (rejected for security)", f.Name)
 		}
+
+		// Prevent path traversal
+		if !isSafePath(dest, f.Name) {
+			return errors.New("archive contains path traversal: %s", f.Name)
+		}
+
+		target := filepath.Join(dest, filepath.Clean(f.Name))
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
@@ -382,14 +406,14 @@ func extractZip(src string, dest string) error {
 			return errors.Wrap(err, "opening zip entry %s", f.Name)
 		}
 
-		outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, f.Mode())
+		// Strip setuid/setgid/sticky bits — keep only rwx permissions (matches tar extractor)
+		outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, f.Mode()&os.ModePerm)
 		if err != nil {
 			rc.Close()
 			return errors.Wrap(err, "creating file %s", target)
 		}
 
-		//nolint:gosec // Size is bounded by GitHub's asset limits
-		if _, err := io.Copy(outFile, rc); err != nil {
+		if _, err := io.Copy(outFile, io.LimitReader(rc, maxFileSize)); err != nil {
 			outFile.Close()
 			rc.Close()
 			return errors.Wrap(err, "writing file %s", target)
@@ -399,6 +423,26 @@ func extractZip(src string, dest string) error {
 		rc.Close()
 	}
 
+	return nil
+}
+
+// isSafePath checks that a file path from an archive stays within the destination directory.
+func isSafePath(base, name string) bool {
+	target := filepath.Join(base, filepath.Clean(name))
+	return strings.HasPrefix(target, filepath.Clean(base)+string(os.PathSeparator))
+}
+
+// validateToolName rejects tool names that contain path separators or are relative path components.
+func validateToolName(name string) error {
+	if name == "" {
+		return errors.New("tool name must not be empty")
+	}
+	if name == "." || name == ".." {
+		return errors.New("invalid tool name: %q", name)
+	}
+	if filepath.Base(name) != name {
+		return errors.New("invalid tool name: %q (must not contain path separators)", name)
+	}
 	return nil
 }
 
@@ -461,10 +505,19 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return errors.Wrap(err, "creating destination file")
 	}
-	defer out.Close()
 
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
 		return errors.Wrap(err, "copying file")
+	}
+
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return errors.Wrap(err, "syncing destination file")
+	}
+
+	if err := out.Close(); err != nil {
+		return errors.Wrap(err, "closing destination file")
 	}
 
 	return nil

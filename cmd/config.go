@@ -2,10 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/errors"
@@ -110,7 +108,7 @@ func runConfigList(_ *cobra.Command, _ []string) error {
 		for _, k := range keys {
 			entries = append(entries, entry{
 				Key:          k,
-				Value:        maskValue(k, fields[k]),
+				Value:        config.MaskValue(k, fields[k]),
 				DefaultValue: config.DefaultValue(k),
 			})
 		}
@@ -124,7 +122,7 @@ func runConfigList(_ *cobra.Command, _ []string) error {
 
 	for _, k := range keys {
 		rows = append(rows, output.TableRow{
-			Columns: []string{k, maskValue(k, fields[k]), config.DefaultValue(k)},
+			Columns: []string{k, config.MaskValue(k, fields[k]), config.DefaultValue(k)},
 		})
 	}
 
@@ -171,7 +169,7 @@ func runConfigSet(_ *cobra.Command, args []string) error {
 		return unknownKeyError(key)
 	}
 
-	if err := validateValue(key, value); err != nil {
+	if err := config.ValidateValue(key, value); err != nil {
 		return err
 	}
 
@@ -248,31 +246,4 @@ func unknownKeyError(key string) error {
 		return errors.New("unknown config key %q — %s", key, suggestion)
 	}
 	return errors.New("unknown config key %q\nValid keys: %s", key, strings.Join(keys, ", "))
-}
-
-func validateValue(key, value string) error {
-	switch key {
-	case "update_interval":
-		if _, err := time.ParseDuration(value); err != nil {
-			return errors.New("invalid duration for update_interval: %q (examples: 12h, 30m, 24h)", value)
-		}
-	case "registry_url":
-		if value == "local" {
-			break
-		}
-		u, err := url.Parse(value)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return errors.New("invalid URL for registry_url: %q (must include scheme and host, or \"local\")", value)
-		}
-	default:
-		// No validation for other keys (e.g. github_token)
-	}
-	return nil
-}
-
-func maskValue(key, value string) string {
-	if key == "github_token" && value != "" {
-		return "****"
-	}
-	return value
 }

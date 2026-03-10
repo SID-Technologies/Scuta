@@ -46,17 +46,21 @@ func runInit(_ *cobra.Command, _ []string) error {
 
 	// 2. Configure registry and write config
 	configPath := scutaDir + "/config.yaml"
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		cfg, err := promptInitialConfig()
-		if err != nil {
-			return err
+	_, statErr := os.Stat(configPath)
+
+	if statErr == nil {
+		output.Success("Config already exists")
+	}
+
+	if os.IsNotExist(statErr) {
+		cfg, cfgErr := promptInitialConfig()
+		if cfgErr != nil {
+			return cfgErr
 		}
-		if err := config.Save(scutaDir, cfg); err != nil {
-			return err
+		if cfgErr = config.Save(scutaDir, cfg); cfgErr != nil {
+			return cfgErr
 		}
 		output.Success("Created config")
-	} else {
-		output.Success("Config already exists")
 	}
 
 	// 3. Detect GitHub auth
@@ -83,7 +87,9 @@ func runInit(_ *cobra.Command, _ []string) error {
 
 	// 5. Install shell completions (only prompt on first init)
 	shell := shellutil.DetectShell()
-	if shell != "sh" && !completionsInstalled(shell) {
+	if completionsInstalled(shell) {
+		output.Success("Shell completions already installed")
+	} else if shell != "sh" {
 		reader := prompt.NewReader(bufio.NewReader(os.Stdin))
 		answer, err := reader.Ask("Install shell completions? (Y/n)", "Y")
 		if err == nil && (answer == "Y" || answer == "y" || answer == "yes" || answer == "") {
@@ -91,8 +97,6 @@ func runInit(_ *cobra.Command, _ []string) error {
 				output.Warning("Failed to install completions: %v", err)
 			}
 		}
-	} else if completionsInstalled(shell) {
-		output.Success("Shell completions already installed")
 	}
 
 	// 6. Print next steps

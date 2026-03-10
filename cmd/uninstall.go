@@ -61,7 +61,8 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	// Determine which tools to uninstall
 	var toolNames []string
 
-	if allFlag {
+	switch {
+	case allFlag:
 		for name := range st.Tools {
 			toolNames = append(toolNames, name)
 		}
@@ -69,9 +70,9 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 			output.Info("No tools installed")
 			return nil
 		}
-	} else if len(args) == 1 {
+	case len(args) == 1:
 		toolNames = []string{args[0]}
-	} else {
+	default:
 		output.Error("specify a tool name or use --all")
 		return nil
 	}

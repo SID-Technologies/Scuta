@@ -73,6 +73,7 @@ func runInfo(_ *cobra.Command, args []string) error {
 		DependsOn:   tool.DependsOn,
 	}
 
+	info.Status = "not installed"
 	if installed {
 		info.Status = "installed"
 		info.Version = ts.Version
@@ -89,8 +90,6 @@ func runInfo(_ *cobra.Command, args []string) error {
 				info.BinarySize = output.FormatBytes(fi.Size())
 			}
 		}
-	} else {
-		info.Status = "not installed"
 	}
 
 	// JSON output

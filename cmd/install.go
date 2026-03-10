@@ -3,14 +3,13 @@ package cmd
 import (
 	"context"
 	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/graph"
+	"github.com/sid-technologies/scuta/lib/helper"
 	"github.com/sid-technologies/scuta/lib/history"
 	"github.com/sid-technologies/scuta/lib/installer"
 	"github.com/sid-technologies/scuta/lib/lock"
@@ -51,16 +50,8 @@ func init() {
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithCancel(cmd.Context())
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		output.Warning("\nInterrupted, cleaning up...")
-		cancel()
-	}()
-	defer signal.Stop(sigChan)
-	defer cancel()
+	ctx, cleanup := helper.WithSignalCancel(cmd.Context())
+	defer cleanup()
 
 	allFlag, _ := cmd.Flags().GetBool("all")
 	versionFlag, _ := cmd.Flags().GetString("version")

@@ -1,6 +1,7 @@
 package github
 
 import (
+	"net/http"
 	"testing"
 )
 
@@ -196,5 +197,34 @@ func TestValidateDownloadURLGitHubEnterprise(t *testing.T) {
 	err = client.validateDownloadURL("https://evil.com/tool.tar.gz")
 	if err == nil {
 		t.Error("expected error for evil host, got nil")
+	}
+}
+
+func TestValidateJSONContentType(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		wantErr     bool
+	}{
+		{"application/json", "application/json", false},
+		{"with charset", "application/json; charset=utf-8", false},
+		{"text/html", "text/html", true},
+		{"text/plain", "text/plain", true},
+		{"empty", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &http.Response{
+				Header: make(http.Header),
+			}
+			if tt.contentType != "" {
+				resp.Header.Set("Content-Type", tt.contentType)
+			}
+			err := validateJSONContentType(resp)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateJSONContentType(%q) error = %v, wantErr %v", tt.contentType, err, tt.wantErr)
+			}
+		})
 	}
 }

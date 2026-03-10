@@ -103,6 +103,10 @@ func (c *Client) fetchRelease(ctx context.Context, url string) (*Release, error)
 		return nil, errors.New("GitHub API returned %d for %s", resp.StatusCode, url)
 	}
 
+	if err := validateJSONContentType(resp); err != nil {
+		return nil, errors.Wrap(err, "unexpected response from %s", url)
+	}
+
 	var release Release
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return nil, errors.Wrap(err, "parsing release JSON")
@@ -332,6 +336,18 @@ func NormalizeVersion(tag string) string {
 // VersionFromTag extracts and normalizes a version from a git tag.
 func VersionFromTag(tag string) string {
 	return NormalizeVersion(tag)
+}
+
+// validateJSONContentType checks that an HTTP response has a JSON Content-Type.
+func validateJSONContentType(resp *http.Response) error {
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		return errors.New("response has no Content-Type header (expected application/json)")
+	}
+	if !strings.Contains(strings.ToLower(ct), "application/json") {
+		return errors.New("unexpected Content-Type %q (expected application/json)", ct)
+	}
+	return nil
 }
 
 // allowedDownloadHosts are the GitHub hosts that are trusted for asset downloads.

@@ -3,6 +3,7 @@ module github.com/sid-technologies/scuta
 go 1.23.0
 
 require (
+	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.9.1
 	gopkg.in/yaml.v3 v3.0.1

@@ -158,6 +158,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	defer lock.Release(scutaDir)
 
 	inst := installer.New(ghClient, scutaDir)
+	pol := loadPolicy(scutaDir)
 	start := time.Now()
 	var toolResults []history.ToolResult
 	successCount := 0
@@ -165,6 +166,19 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	for _, u := range toUpdate {
 		tool, _ := reg.Get(u.Name)
 		toolStart := time.Now()
+
+		// Policy check before updating
+		if v := pol.CheckToolVersion(u.Name, u.LatestVersion); v != nil {
+			output.Error("Policy violation for %s: %s", u.Name, v.Message)
+			toolResults = append(toolResults, history.ToolResult{
+				Name:     u.Name,
+				Action:   "update",
+				Success:  false,
+				Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+				Error:    v.Message,
+			})
+			continue
+		}
 
 		output.Info("Updating %s %s → %s...", u.Name, u.CurrentVersion, u.LatestVersion)
 

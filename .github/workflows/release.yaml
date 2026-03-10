@@ -3,19 +3,15 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release (e.g., 0.1.0, 0.2.0)'
-        required: true
-        type: string
       bump:
-        description: 'Or auto-bump from latest tag'
-        required: false
+        description: "Version bump type"
+        required: true
         type: choice
         options:
-          - none
           - patch
           - minor
           - major
+        default: patch
 
 permissions:
   contents: write
@@ -37,35 +33,24 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
-            VERSION="${VERSION#v}"
+          LATEST=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || echo "")
 
-            if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
-              echo "Error: Version must be semantic versioning format (e.g., 0.1.0, 1.2.3-beta.1)"
-              echo "You entered: ${{ inputs.version }}"
-              exit 1
-            fi
-          elif [ "${{ inputs.bump }}" != "none" ] && [ -n "${{ inputs.bump }}" ]; then
-            LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-            LATEST=${LATEST#v}
-
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST"
-
-            case "${{ inputs.bump }}" in
-              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-              patch) PATCH=$((PATCH + 1)) ;;
-            esac
-
-            VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          else
-            echo "Error: Either version or bump must be specified"
-            exit 1
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
           fi
 
+          CLEAN="${LATEST#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN"
+
+          case "${{ inputs.bump }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Releasing version: v${VERSION}"
+          echo "Releasing: v${VERSION}"
 
       - name: Create and push tag
         run: |

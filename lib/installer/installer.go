@@ -292,6 +292,9 @@ func (inst *Installer) Uninstall(toolName string) error {
 	return nil
 }
 
+// maxFileSize is the maximum allowed size for a single extracted file (100 MB).
+const maxFileSize = 100 * 1024 * 1024
+
 // extractTarGz extracts a .tar.gz archive to the destination directory.
 func extractTarGz(src string, dest string) error {
 	f, err := os.Open(src)
@@ -317,11 +320,17 @@ func extractTarGz(src string, dest string) error {
 			return errors.Wrap(err, "reading tar entry")
 		}
 
-		// Prevent path traversal
-		target := filepath.Join(dest, filepath.Clean(header.Name))
-		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
-			continue
+		// Reject symlinks and hard links
+		if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeLink {
+			return errors.New("archive contains a symlink or hard link: %s (rejected for security)", header.Name)
 		}
+
+		// Prevent path traversal
+		if !isSafePath(dest, header.Name) {
+			return errors.New("archive contains path traversal: %s", header.Name)
+		}
+
+		target := filepath.Join(dest, filepath.Clean(header.Name))
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -339,14 +348,13 @@ func extractTarGz(src string, dest string) error {
 				return errors.Wrap(err, "creating file %s", target)
 			}
 
-			//nolint:gosec // Size is bounded by GitHub's asset limits
-			if _, err := io.Copy(outFile, tr); err != nil {
+			if _, err := io.Copy(outFile, io.LimitReader(tr, maxFileSize)); err != nil {
 				outFile.Close()
 				return errors.Wrap(err, "writing file %s", target)
 			}
 			outFile.Close()
 		default:
-			// Skip unsupported entry types (symlinks, etc.)
+			// Skip other entry types
 		}
 	}
 
@@ -362,11 +370,17 @@ func extractZip(src string, dest string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
-		// Prevent path traversal
-		target := filepath.Join(dest, filepath.Clean(f.Name))
-		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
-			continue
+		// Reject symlinks
+		if f.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return errors.New("archive contains a symlink: %s (rejected for security)", f.Name)
 		}
+
+		// Prevent path traversal
+		if !isSafePath(dest, f.Name) {
+			return errors.New("archive contains path traversal: %s", f.Name)
+		}
+
+		target := filepath.Join(dest, filepath.Clean(f.Name))
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
@@ -391,8 +405,7 @@ func extractZip(src string, dest string) error {
 			return errors.Wrap(err, "creating file %s", target)
 		}
 
-		//nolint:gosec // Size is bounded by GitHub's asset limits
-		if _, err := io.Copy(outFile, rc); err != nil {
+		if _, err := io.Copy(outFile, io.LimitReader(rc, maxFileSize)); err != nil {
 			outFile.Close()
 			rc.Close()
 			return errors.Wrap(err, "writing file %s", target)
@@ -403,6 +416,12 @@ func extractZip(src string, dest string) error {
 	}
 
 	return nil
+}
+
+// isSafePath checks that a file path from an archive stays within the destination directory.
+func isSafePath(base, name string) bool {
+	target := filepath.Join(base, filepath.Clean(name))
+	return strings.HasPrefix(target, filepath.Clean(base)+string(os.PathSeparator))
 }
 
 // findBinary looks for an executable file matching the tool name in the given directory.

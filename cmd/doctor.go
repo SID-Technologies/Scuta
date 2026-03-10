@@ -43,23 +43,23 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	// 1. Check ~/.scuta/bin/ exists
 	binDir, err := path.BinDir()
 	if err != nil {
-		printCheck(false, "~/.scuta/bin/ directory")
+		output.PrintCheck(false, "~/.scuta/bin/ directory")
 		issues++
 	} else {
 		if _, err := os.Stat(binDir); os.IsNotExist(err) {
-			printCheck(false, "~/.scuta/bin/ directory exists")
+			output.PrintCheck(false, "~/.scuta/bin/ directory exists")
 			output.Dimmed("  Run 'scuta init' to create it")
 			issues++
 		} else {
-			printCheck(true, "~/.scuta/bin/ directory exists")
+			output.PrintCheck(true, "~/.scuta/bin/ directory exists")
 		}
 	}
 
 	// 2. Check ~/.scuta/bin/ is in PATH
 	if binDir != "" && isInPath(binDir) {
-		printCheck(true, "~/.scuta/bin/ is in PATH")
+		output.PrintCheck(true, "~/.scuta/bin/ is in PATH")
 	} else {
-		printCheckWarn("~/.scuta/bin/ is not in PATH")
+		output.PrintCheckWarn("~/.scuta/bin/ is not in PATH")
 		output.Dimmed("  Run 'scuta init' for setup instructions")
 		issues++
 	}
@@ -67,16 +67,16 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	// 3. Check state file
 	scutaDir, err := path.ScutaDir()
 	if err != nil {
-		printCheck(false, "Scuta directory")
+		output.PrintCheck(false, "Scuta directory")
 		return nil
 	}
 
 	st, err := state.Load(scutaDir)
 	if err != nil {
-		printCheck(false, "State file is valid")
+		output.PrintCheck(false, "State file is valid")
 		issues++
 	} else {
-		printCheck(true, "State file is valid")
+		output.PrintCheck(true, "State file is valid")
 	}
 
 	// 4. Check installed binaries exist and are executable
@@ -88,20 +88,20 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 			}
 			info, err := os.Stat(ts.BinaryPath)
 			if err != nil {
-				printCheck(false, "%s binary exists at %s", name, ts.BinaryPath)
+				output.PrintCheck(false, "%s binary exists at %s", name, ts.BinaryPath)
 				allGood = false
 				issues++
 				continue
 			}
 			if info.Mode()&0o111 == 0 {
-				printCheck(false, "%s binary is executable", name)
+				output.PrintCheck(false, "%s binary is executable", name)
 				allGood = false
 				issues++
 				continue
 			}
 		}
 		if allGood {
-			printCheck(true, "All installed binaries exist and are executable")
+			output.PrintCheck(true, "All installed binaries exist and are executable")
 		}
 	} else {
 		output.Dimmed("  No tools installed yet")
@@ -110,9 +110,9 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	// 5. Check GitHub auth
 	token := auth.ResolveTokenWithConfig(scutaDir)
 	if token != "" {
-		printCheck(true, "GitHub authentication configured")
+		output.PrintCheck(true, "GitHub authentication configured")
 	} else {
-		printCheckWarn("GitHub authentication not configured")
+		output.PrintCheckWarn("GitHub authentication not configured")
 		output.Dimmed("  Set SCUTA_GITHUB_TOKEN or install gh CLI for private repo access")
 		issues++
 	}
@@ -120,10 +120,10 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	// 6. Check registry
 	_, err = registry.Load()
 	if err != nil {
-		printCheck(false, "Registry is loadable")
+		output.PrintCheck(false, "Registry is loadable")
 		issues++
 	} else {
-		printCheck(true, "Registry is loadable")
+		output.PrintCheck(true, "Registry is loadable")
 	}
 
 	// 7. Policy compliance
@@ -131,10 +131,10 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	if pol != nil {
 		// Check Scuta version
 		if v := pol.CheckScutaVersion(version); v != nil {
-			printCheck(false, "Scuta version meets policy minimum (%s)", v.Message)
+			output.PrintCheck(false, "Scuta version meets policy minimum (%s)", v.Message)
 			issues++
 		} else if pol.MinScutaVersion != "" {
-			printCheck(true, "Scuta version meets policy minimum (>= %s)", pol.MinScutaVersion)
+			output.PrintCheck(true, "Scuta version meets policy minimum (>= %s)", pol.MinScutaVersion)
 		}
 
 		// Check all installed tool versions
@@ -146,10 +146,10 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 
 			violations := pol.CheckAll(installed)
 			if len(violations) == 0 {
-				printCheck(true, "All installed tools comply with policy")
+				output.PrintCheck(true, "All installed tools comply with policy")
 			} else {
 				for _, v := range violations {
-					printCheck(false, "%s %s: %s", v.Tool, v.Version, v.Message)
+					output.PrintCheck(false, "%s %s: %s", v.Tool, v.Version, v.Message)
 					issues++
 				}
 			}
@@ -167,18 +167,4 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	}
 
 	return nil
-}
-
-func printCheck(ok bool, msg string, args ...any) {
-	formatted := fmt.Sprintf(msg, args...)
-	if ok {
-		fmt.Printf("  %s%s%s %s\n", output.SuccessColor, output.SymbolSuccess, output.Reset, formatted)
-	} else {
-		fmt.Printf("  %s%s%s %s\n", output.ErrorColor, output.SymbolFailure, output.Reset, formatted)
-	}
-}
-
-func printCheckWarn(msg string, args ...any) {
-	formatted := fmt.Sprintf(msg, args...)
-	fmt.Printf("  %s%s%s %s\n", output.WarningColor, output.SymbolWarning, output.Reset, formatted)
 }

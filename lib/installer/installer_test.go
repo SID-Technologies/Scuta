@@ -330,3 +330,29 @@ func TestIsSafePath(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateToolName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"valid simple", "pilum", false},
+		{"valid with dash", "my-tool", false},
+		{"valid with underscore", "my_tool", false},
+		{"traversal", "../escape", true},
+		{"path separator", "foo/bar", true},
+		{"dot", ".", true},
+		{"dotdot", "..", true},
+		{"empty", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateToolName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateToolName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}

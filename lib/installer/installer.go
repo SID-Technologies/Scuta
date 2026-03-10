@@ -41,6 +41,10 @@ func New(ghClient *github.Client, scutaDir string) *Installer {
 
 // Install downloads and installs a tool binary from GitHub Releases.
 func (inst *Installer) Install(ctx context.Context, toolName string, repo string, targetVersion string, force bool, skipVerify bool) (*InstallResult, error) {
+	if err := validateToolName(toolName); err != nil {
+		return nil, err
+	}
+
 	// Check for cancellation before starting
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -279,6 +283,10 @@ func parseVersionFromFilename(filename string) string {
 
 // Uninstall removes a tool binary from the bin directory.
 func (inst *Installer) Uninstall(toolName string) error {
+	if err := validateToolName(toolName); err != nil {
+		return err
+	}
+
 	binaryPath := filepath.Join(inst.binDir, toolName)
 
 	if err := os.Remove(binaryPath); err != nil {
@@ -422,6 +430,20 @@ func extractZip(src string, dest string) error {
 func isSafePath(base, name string) bool {
 	target := filepath.Join(base, filepath.Clean(name))
 	return strings.HasPrefix(target, filepath.Clean(base)+string(os.PathSeparator))
+}
+
+// validateToolName rejects tool names that contain path separators or are relative path components.
+func validateToolName(name string) error {
+	if name == "" {
+		return errors.New("tool name must not be empty")
+	}
+	if name == "." || name == ".." {
+		return errors.New("invalid tool name: %q", name)
+	}
+	if filepath.Base(name) != name {
+		return errors.New("invalid tool name: %q (must not contain path separators)", name)
+	}
+	return nil
 }
 
 // findBinary looks for an executable file matching the tool name in the given directory.

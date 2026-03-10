@@ -31,21 +31,6 @@ func init() {
 	rootCmd.AddCommand(InfoCmd())
 }
 
-// toolInfo holds all fields for JSON output.
-type toolInfo struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Repository  string   `json:"repository"`
-	Source      string   `json:"source"`
-	Status      string   `json:"status"`
-	Version     string   `json:"version,omitempty"`
-	InstalledAt string   `json:"installed_at,omitempty"`
-	UpdatedAt   string   `json:"updated_at,omitempty"`
-	BinaryPath  string   `json:"binary_path,omitempty"`
-	BinarySize  string   `json:"binary_size,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
-}
-
 func runInfo(_ *cobra.Command, args []string) error {
 	toolName := args[0]
 
@@ -80,7 +65,7 @@ func runInfo(_ *cobra.Command, args []string) error {
 	source := reg.Source(toolName)
 
 	// Build info struct
-	info := toolInfo{
+	info := output.ToolInfo{
 		Name:        toolName,
 		Description: tool.Description,
 		Repository:  tool.Repo,

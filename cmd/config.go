@@ -98,15 +98,9 @@ func runConfigList(_ *cobra.Command, _ []string) error {
 	sort.Strings(keys)
 
 	if output.IsJSON() {
-		type entry struct {
-			Key          string `json:"key"`
-			Value        string `json:"value"`
-			DefaultValue string `json:"default"`
-		}
-
-		var entries []entry
+		var entries []output.ConfigEntry
 		for _, k := range keys {
-			entries = append(entries, entry{
+			entries = append(entries, output.ConfigEntry{
 				Key:          k,
 				Value:        config.MaskValue(k, fields[k]),
 				DefaultValue: config.DefaultValue(k),

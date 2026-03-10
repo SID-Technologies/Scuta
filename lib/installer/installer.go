@@ -149,7 +149,7 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 	}
 
 	// Ensure bin directory exists
-	if err := os.MkdirAll(inst.binDir, 0o755); err != nil {
+	if err := os.MkdirAll(inst.binDir, 0o700); err != nil {
 		return nil, errors.Wrap(err, "creating bin directory")
 	}
 
@@ -217,7 +217,7 @@ func (inst *Installer) InstallFromArchive(toolName string, archivePath string) (
 	}
 
 	// Ensure bin directory exists
-	if err := os.MkdirAll(inst.binDir, 0o755); err != nil {
+	if err := os.MkdirAll(inst.binDir, 0o700); err != nil {
 		return nil, errors.Wrap(err, "creating bin directory")
 	}
 

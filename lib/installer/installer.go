@@ -89,23 +89,25 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 		return nil, errors.Wrap(err, "downloading %s", asset.Name)
 	}
 
-	// Checksum verification
+	// Checksum verification (fail-closed: any failure is an error unless --skip-verify)
 	if skipVerify {
 		output.Warning("Skipping checksum verification (--skip-verify)")
 	} else {
 		checksums, csErr := inst.github.DownloadChecksums(ctx, release)
 		if csErr != nil {
-			output.Warning("Failed to download checksums: %v", csErr)
-		} else if checksums == nil {
-			output.Warning("No checksums.txt in release, skipping verification")
-		} else if expectedHash, ok := checksums[asset.Name]; ok {
-			if err := VerifyChecksum(archivePath, expectedHash); err != nil {
-				return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
-			}
-			output.Debugf("Checksum verified for %s", asset.Name)
-		} else {
-			output.Warning("No checksum found for %s in checksums.txt", asset.Name)
+			return nil, errors.Wrap(csErr, "checksum verification failed for %s: could not download checksums", toolName)
 		}
+		if checksums == nil {
+			return nil, errors.New("checksum verification failed for %s: no checksums file in release (use --skip-verify to override)", toolName)
+		}
+		expectedHash, ok := checksums[asset.Name]
+		if !ok {
+			return nil, errors.New("checksum verification failed for %s: no entry for %s in checksums file (use --skip-verify to override)", toolName, asset.Name)
+		}
+		if err := VerifyChecksum(archivePath, expectedHash); err != nil {
+			return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
+		}
+		output.Debugf("Checksum verified for %s", asset.Name)
 	}
 
 	// Check for cancellation before extraction
@@ -382,7 +384,8 @@ func extractZip(src string, dest string) error {
 			return errors.Wrap(err, "opening zip entry %s", f.Name)
 		}
 
-		outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, f.Mode())
+		// Strip setuid/setgid/sticky bits — keep only rwx permissions (matches tar extractor)
+		outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, f.Mode()&os.ModePerm)
 		if err != nil {
 			rc.Close()
 			return errors.Wrap(err, "creating file %s", target)
@@ -461,10 +464,19 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return errors.Wrap(err, "creating destination file")
 	}
-	defer out.Close()
 
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
 		return errors.Wrap(err, "copying file")
+	}
+
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return errors.Wrap(err, "syncing destination file")
+	}
+
+	if err := out.Close(); err != nil {
+		return errors.Wrap(err, "closing destination file")
 	}
 
 	return nil

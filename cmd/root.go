@@ -75,6 +75,15 @@ func init() {
 
 	rootCmd.SetVersionTemplate("scuta {{.Version}}\n")
 	rootCmd.Version = version
+
+	defaultHelpFunc := rootCmd.HelpFunc()
+	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		if cmd.Parent() == nil {
+			banner := output.PrintBanner(version)
+			fmt.Print(banner)
+		}
+		defaultHelpFunc(cmd, args)
+	})
 }
 
 // initOutputMode sets the global output mode based on flags.

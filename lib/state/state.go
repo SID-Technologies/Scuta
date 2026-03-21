@@ -119,3 +119,54 @@ func (s *State) GetTool(name string) (ToolState, bool) {
 	ts, ok := s.Tools[name]
 	return ts, ok
 }
+
+// ToolEntry includes the tool state and its install source.
+type ToolEntry struct {
+	ToolState
+	Name   string `json:"name"`
+	Source string `json:"source"` // "user" or "system"
+}
+
+// MergedTools returns all tools from both user and system state.
+// User installations take precedence over system installations for the same tool.
+func MergedTools(userState *State, systemStatePath string) []ToolEntry {
+	var entries []ToolEntry
+
+	// Load system state (best-effort)
+	systemTools := make(map[string]ToolState)
+	if data, err := os.ReadFile(systemStatePath); err == nil {
+		var sys State
+		if err := json.Unmarshal(data, &sys); err == nil && sys.Tools != nil {
+			systemTools = sys.Tools
+		}
+	}
+
+	// Merge: user tools first (take precedence)
+	seen := make(map[string]bool)
+	if userState != nil {
+		userState.mu.RLock()
+		for name, ts := range userState.Tools {
+			entries = append(entries, ToolEntry{
+				ToolState: ts,
+				Name:      name,
+				Source:    "user",
+			})
+			seen[name] = true
+		}
+		userState.mu.RUnlock()
+	}
+
+	// Add system tools that aren't in user state
+	for name, ts := range systemTools {
+		if seen[name] {
+			continue
+		}
+		entries = append(entries, ToolEntry{
+			ToolState: ts,
+			Name:      name,
+			Source:    "system",
+		})
+	}
+
+	return entries
+}

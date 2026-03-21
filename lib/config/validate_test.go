@@ -56,6 +56,23 @@ func TestValidateURL(t *testing.T) {
 
 		// github_token (no validation)
 		{"github token", "github_token", "ghp_abc123", false},
+
+		// audit_log_destination
+		{"audit empty", "audit_log_destination", "", false},
+		{"audit stdout", "audit_log_destination", "stdout", false},
+		{"audit syslog", "audit_log_destination", "syslog", false},
+		{"audit valid webhook", "audit_log_destination", "https://hooks.example.com/audit", false},
+		{"audit plain string", "audit_log_destination", "not-a-url", true},
+		{"audit http webhook", "audit_log_destination", "http://hooks.example.com/audit", true},
+		{"audit localhost webhook", "audit_log_destination", "https://localhost/audit", true},
+
+		// telemetry and require_signature booleans
+		{"telemetry true", "telemetry", "true", false},
+		{"telemetry false", "telemetry", "false", false},
+		{"telemetry yes", "telemetry", "yes", false},
+		{"telemetry invalid", "telemetry", "maybe", true},
+		{"require_sig true", "require_signature", "true", false},
+		{"require_sig invalid", "require_signature", "nope", true},
 	}
 
 	for _, tt := range tests {

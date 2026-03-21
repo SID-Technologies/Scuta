@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"github.com/sid-technologies/scuta/lib/auth"
+	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/installer"
 	"github.com/sid-technologies/scuta/lib/lock"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
+	"github.com/sid-technologies/scuta/lib/telemetry"
 	"github.com/sid-technologies/scuta/lib/updater"
 
 	"github.com/spf13/cobra"
@@ -80,5 +82,12 @@ func runSelfUpdate(cmd *cobra.Command, _ []string) error {
 	}
 
 	output.Success("scuta %s → %s (updated)", update.CurrentVersion, update.LatestVersion)
+
+	// Telemetry (best-effort)
+	cfg, cfgErr := config.LoadWithMerge(scutaDir)
+	if cfgErr == nil {
+		_ = telemetry.Record(scutaDir, cfg.Telemetry, "self-update")
+	}
+
 	return nil
 }

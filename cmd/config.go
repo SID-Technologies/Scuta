@@ -10,6 +10,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/suggest"
+	"github.com/sid-technologies/scuta/lib/telemetry"
 
 	"github.com/spf13/cobra"
 )
@@ -88,7 +89,7 @@ func runConfigList(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(scutaDir)
+	cfg, err := config.LoadWithMerge(scutaDir)
 	if err != nil {
 		return err
 	}
@@ -136,7 +137,7 @@ func runConfigGet(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(scutaDir)
+	cfg, err := config.LoadWithMerge(scutaDir)
 	if err != nil {
 		return err
 	}
@@ -178,6 +179,9 @@ func runConfigSet(_ *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Track whether telemetry was previously disabled
+	wasTelemetryDisabled := !cfg.Telemetry
+
 	if err := cfg.SetField(key, value); err != nil {
 		return errors.Wrap(err, "setting config value")
 	}
@@ -187,6 +191,13 @@ func runConfigSet(_ *cobra.Command, args []string) error {
 	}
 
 	output.Success("Set %s = %s", key, config.MaskValue(key, value))
+
+	// Show one-time message when telemetry is first enabled
+	if key == "telemetry" && cfg.Telemetry && wasTelemetryDisabled {
+		fmt.Println()
+		output.Info(telemetry.EnabledMessage())
+	}
+
 	return nil
 }
 

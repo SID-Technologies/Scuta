@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -326,6 +327,171 @@ func TestIsSafePath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isSafePath("/tmp/extract", tt.path); got != tt.safe {
 				t.Errorf("isSafePath(%q) = %v, want %v", tt.path, got, tt.safe)
+			}
+		})
+	}
+}
+
+func TestBinaryName(t *testing.T) {
+	// binaryName should return the tool name as-is on non-Windows,
+	// and with .exe on Windows. We test the function directly.
+	name := binaryName("pilum")
+	if runtime.GOOS == "windows" {
+		if name != "pilum.exe" {
+			t.Errorf("expected pilum.exe on Windows, got %q", name)
+		}
+	} else {
+		if name != "pilum" {
+			t.Errorf("expected pilum on non-Windows, got %q", name)
+		}
+	}
+
+	// Should not double-add .exe
+	if runtime.GOOS == "windows" {
+		name = binaryName("pilum.exe")
+		if name != "pilum.exe" {
+			t.Errorf("expected pilum.exe (no double suffix), got %q", name)
+		}
+	}
+}
+
+func TestFindBinaryWithExtension(t *testing.T) {
+	// Test that findBinary can find a file with an extension via nameWithoutExt matching.
+	// This works on any OS (the .exe check is the only Windows-specific part).
+	tmpDir := t.TempDir()
+
+	binaryPath := filepath.Join(tmpDir, "mytool.exe")
+	if err := os.WriteFile(binaryPath, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// findBinary strips extensions and matches against the tool name
+	found, err := findBinary(tmpDir, "mytool")
+	if err != nil {
+		t.Fatalf("findBinary failed: %v", err)
+	}
+
+	if found != binaryPath {
+		t.Errorf("expected %q, got %q", binaryPath, found)
+	}
+}
+
+func TestFindBinaryPrefixFallback(t *testing.T) {
+	// Test that findBinary falls back to prefix matching (e.g., "pilum_v1.0.0_darwin_arm64")
+	tmpDir := t.TempDir()
+
+	binaryPath := filepath.Join(tmpDir, "mytool_v1.0.0_darwin_arm64")
+	if err := os.WriteFile(binaryPath, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := findBinary(tmpDir, "mytool")
+	if err != nil {
+		t.Fatalf("findBinary failed: %v", err)
+	}
+
+	if found != binaryPath {
+		t.Errorf("expected %q, got %q", binaryPath, found)
+	}
+}
+
+func TestFindBinaryExactOverPrefix(t *testing.T) {
+	// Exact match should be preferred over prefix match
+	tmpDir := t.TempDir()
+
+	exactPath := filepath.Join(tmpDir, "mytool")
+	if err := os.WriteFile(exactPath, []byte("exact"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prefixPath := filepath.Join(tmpDir, "mytool_v1.0.0_darwin_arm64")
+	if err := os.WriteFile(prefixPath, []byte("prefix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := findBinary(tmpDir, "mytool")
+	if err != nil {
+		t.Fatalf("findBinary failed: %v", err)
+	}
+
+	if found != exactPath {
+		t.Errorf("expected exact match %q, got %q", exactPath, found)
+	}
+}
+
+func TestSetSignatureVerification(t *testing.T) {
+	inst := New(nil, t.TempDir())
+
+	// Default: no signature verification
+	if inst.requireSignature {
+		t.Error("expected requireSignature=false by default")
+	}
+	if inst.signaturePubKey != nil {
+		t.Error("expected nil signaturePubKey by default")
+	}
+
+	// Set signature verification
+	pubKey := []byte("-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----")
+	inst.SetSignatureVerification(true, pubKey)
+
+	if !inst.requireSignature {
+		t.Error("expected requireSignature=true after SetSignatureVerification")
+	}
+	if string(inst.signaturePubKey) != string(pubKey) {
+		t.Errorf("expected pubKey to be set, got %q", inst.signaturePubKey)
+	}
+}
+
+func TestSetSignatureVerificationOnNewWithBinDir(t *testing.T) {
+	inst := NewWithBinDir(nil, t.TempDir(), "/usr/local/bin")
+
+	// Should start without signature verification
+	if inst.requireSignature {
+		t.Error("expected requireSignature=false by default for NewWithBinDir")
+	}
+
+	inst.SetSignatureVerification(true, []byte("key"))
+
+	if !inst.requireSignature {
+		t.Error("expected requireSignature=true after set")
+	}
+}
+
+func TestNewSetsDefaultBinDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	inst := New(nil, tmpDir)
+
+	expected := filepath.Join(tmpDir, "bin")
+	if inst.binDir != expected {
+		t.Errorf("expected binDir %q, got %q", expected, inst.binDir)
+	}
+}
+
+func TestNewWithBinDirSetsCustomBinDir(t *testing.T) {
+	inst := NewWithBinDir(nil, t.TempDir(), "/custom/bin")
+	if inst.binDir != "/custom/bin" {
+		t.Errorf("expected binDir '/custom/bin', got %q", inst.binDir)
+	}
+}
+
+func TestParseVersionFromFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		expected string
+	}{
+		{"standard goreleaser", "pilum_1.2.3_darwin_arm64.tar.gz", "1.2.3"},
+		{"with v prefix", "pilum_v2.0.1_linux_amd64.tar.gz", "2.0.1"},
+		{"dash separator", "tool-1.0.0-linux-amd64.tar.gz", "1.0.0"},
+		{"zip extension", "tool_3.2.1_windows_amd64.zip", "3.2.1"},
+		{"no version", "tool_darwin_arm64.tar.gz", "local"},
+		{"tgz extension", "pilum_1.0.0_linux_amd64.tgz", "1.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseVersionFromFilename(tt.filename)
+			if got != tt.expected {
+				t.Errorf("parseVersionFromFilename(%q) = %q, want %q", tt.filename, got, tt.expected)
 			}
 		})
 	}

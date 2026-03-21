@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/history"
@@ -17,6 +18,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/registry"
 	"github.com/sid-technologies/scuta/lib/state"
 	"github.com/sid-technologies/scuta/lib/suggest"
+	"github.com/sid-technologies/scuta/lib/telemetry"
 
 	"github.com/spf13/cobra"
 )
@@ -36,6 +38,7 @@ Use --all to uninstall every installed tool at once.`,
 	cmd.Flags().Bool("all", false, "Uninstall all installed tools")
 	cmd.Flags().Bool("dry-run", false, "Show what would be uninstalled without uninstalling")
 	cmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for --all")
+	cmd.Flags().Bool("system", false, "Uninstall from system-wide location (requires root/admin)")
 
 	return cmd
 }
@@ -49,13 +52,25 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	allFlag, _ := cmd.Flags().GetBool("all")
 	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")
 	yesFlag, _ := cmd.Flags().GetBool("yes")
+	systemFlag, _ := cmd.Flags().GetBool("system")
+
+	if systemFlag && !isRoot() {
+		return exitcodes.NewError(exitcodes.General, "system-wide uninstall requires root/admin privileges (try sudo)")
+	}
 
 	scutaDir, err := path.ScutaDir()
 	if err != nil {
 		return err
 	}
 
-	st, err := state.Load(scutaDir)
+	var stateDir string
+	if systemFlag {
+		stateDir = path.SystemStateDir()
+	} else {
+		stateDir = scutaDir
+	}
+
+	st, err := state.Load(stateDir)
 	if err != nil {
 		return err
 	}
@@ -133,7 +148,13 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 
 	start := time.Now()
 	ghClient := github.NewClient("")
-	inst := installer.New(ghClient, scutaDir)
+
+	var inst *installer.Installer
+	if systemFlag {
+		inst = installer.NewWithBinDir(ghClient, scutaDir, path.SystemBinDir())
+	} else {
+		inst = installer.New(ghClient, scutaDir)
+	}
 
 	var toolResults []history.ToolResult
 	successCount := 0
@@ -173,8 +194,8 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		successCount++
 	}
 
-	// Save state
-	if err := st.Save(scutaDir); err != nil {
+	// Save state (to system dir for --system, user dir otherwise)
+	if err := st.Save(stateDir); err != nil {
 		output.Error("Failed to save state: %v", err)
 	}
 
@@ -183,6 +204,12 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	entry := history.NewEntry("uninstall", allSuccess, time.Since(start), toolResults)
 	if err := history.Record(scutaDir, entry); err != nil {
 		output.Debugf("Failed to record history: %v", err)
+	}
+
+	// Telemetry (best-effort)
+	cfg, cfgErr := config.LoadWithMerge(scutaDir)
+	if cfgErr == nil {
+		_ = telemetry.Record(scutaDir, cfg.Telemetry, "uninstall")
 	}
 
 	if allFlag && len(toolNames) > 1 {

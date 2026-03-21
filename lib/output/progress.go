@@ -2,6 +2,7 @@ package output
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -177,4 +178,43 @@ func (s *StepProgress) Complete() {
 	fmt.Printf("  %s%s%s Complete %s[%s]%s\n",
 		SuccessColor, SymbolSuccess, Reset,
 		Muted, indicator, Reset)
+}
+
+// ProgressReader wraps an io.Reader and updates a ProgressBar based on bytes read.
+// Use it to show download progress by wrapping an HTTP response body.
+type ProgressReader struct {
+	reader io.Reader
+	bar    *ProgressBar
+	read   int64
+}
+
+// NewProgressReader creates a ProgressReader that wraps the given reader.
+// total is the expected number of bytes (e.g. from Content-Length).
+func NewProgressReader(reader io.Reader, total int64) *ProgressReader {
+	bar := NewProgressBar(int(total), 30)
+	bar.SetMessage("downloading...")
+	return &ProgressReader{
+		reader: reader,
+		bar:    bar,
+	}
+}
+
+// Read implements io.Reader and updates the progress bar after each read.
+func (pr *ProgressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	if n > 0 {
+		pr.read += int64(n)
+		pr.bar.SetProgress(int(pr.read))
+	}
+	return n, err
+}
+
+// Complete marks the progress bar as finished with the given message.
+func (pr *ProgressReader) Complete(message string) {
+	pr.bar.Complete(message)
+}
+
+// BytesRead returns the total number of bytes read so far.
+func (pr *ProgressReader) BytesRead() int64 {
+	return pr.read
 }

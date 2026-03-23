@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
+	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/helper"
 	"github.com/sid-technologies/scuta/lib/history"
@@ -16,6 +17,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/registry"
 	"github.com/sid-technologies/scuta/lib/state"
 	"github.com/sid-technologies/scuta/lib/suggest"
+	"github.com/sid-technologies/scuta/lib/telemetry"
 	"github.com/sid-technologies/scuta/lib/updater"
 
 	"github.com/spf13/cobra"
@@ -33,6 +35,7 @@ With a tool name, updates only that tool.`,
 
 	cmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
 	cmd.Flags().Bool("dry-run", false, "Show what would be updated without updating")
+	cmd.Flags().Bool("system", false, "Update system-wide installations (requires root/admin)")
 
 	return cmd
 }
@@ -48,6 +51,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	skipVerifyFlag, _ := cmd.Flags().GetBool("skip-verify")
 	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")
+	systemFlag, _ := cmd.Flags().GetBool("system")
+
+	if systemFlag && !isRoot() {
+		return exitcodes.NewError(exitcodes.General, "system-wide update requires root/admin privileges (try sudo)")
+	}
 
 	reg, err := registry.Load()
 	if err != nil {
@@ -59,7 +67,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	st, err := state.Load(scutaDir)
+	var stateDir string
+	if systemFlag {
+		stateDir = path.SystemStateDir()
+	} else {
+		stateDir = scutaDir
+	}
+
+	st, err := state.Load(stateDir)
 	if err != nil {
 		return err
 	}
@@ -125,6 +140,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	if len(toUpdate) == 0 {
 		output.Info("All tools are up to date")
+
+		// Telemetry (best-effort)
+		cfg, cfgErr := config.LoadWithMerge(scutaDir)
+		if cfgErr == nil {
+			_ = telemetry.Record(scutaDir, cfg.Telemetry, "update")
+		}
 		return nil
 	}
 
@@ -147,7 +168,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 	defer lock.Release(scutaDir)
 
-	inst := installer.New(ghClient, scutaDir)
+	var inst *installer.Installer
+	if systemFlag {
+		inst = installer.NewWithBinDir(ghClient, scutaDir, path.SystemBinDir())
+	} else {
+		inst = installer.New(ghClient, scutaDir)
+	}
 	pol := loadPolicy(scutaDir)
 	start := time.Now()
 	var toolResults []history.ToolResult
@@ -207,9 +233,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		successCount++
 	}
 
-	// Save state
+	// Save state (to system dir for --system, user dir otherwise)
 	st.LastUpdateCheck = time.Now()
-	if err := st.Save(scutaDir); err != nil {
+	if err := st.Save(stateDir); err != nil {
 		output.Error("Failed to save state: %v", err)
 	}
 
@@ -218,6 +244,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	entry := history.NewEntry("update", allSuccess, time.Since(start), toolResults)
 	if err := history.Record(scutaDir, entry); err != nil {
 		output.Debugf("Failed to record history: %v", err)
+	}
+
+	// Telemetry (best-effort, uses merged config for effective settings)
+	cfg, cfgErr := config.LoadWithMerge(scutaDir)
+	if cfgErr == nil {
+		_ = telemetry.Record(scutaDir, cfg.Telemetry, "update")
 	}
 
 	if len(toUpdate) > 1 {

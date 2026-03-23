@@ -37,6 +37,26 @@ type Config struct {
 
 	// PolicyURL is a remote URL to fetch policy.yaml from.
 	PolicyURL string `yaml:"policy_url,omitempty"`
+
+	// ConfigURL is a remote URL pointing to an org-wide YAML config.
+	// When set, the remote config is fetched (with 1h cache) and merged
+	// with the local config (local takes priority).
+	ConfigURL string `yaml:"config_url,omitempty"`
+
+	// Telemetry enables opt-in anonymous usage tracking.
+	// Disabled by default. When enabled, events are recorded locally.
+	Telemetry bool `yaml:"telemetry,omitempty"`
+
+	// RequireSignature makes signature verification mandatory.
+	// When true, installs fail if no .sig file is found in the release.
+	RequireSignature bool `yaml:"require_signature,omitempty"`
+
+	// SignaturePublicKey is a PEM-encoded public key for verifying release signatures.
+	SignaturePublicKey string `yaml:"signature_public_key,omitempty"`
+
+	// AuditLogDestination controls where audit log entries are sent.
+	// Supported values: "" (disabled), "stdout", "syslog", or a webhook URL.
+	AuditLogDestination string `yaml:"audit_log_destination,omitempty"`
 }
 
 // DefaultConfig returns a Config with default values.
@@ -104,7 +124,7 @@ func (c Config) UpdateIntervalDuration() time.Duration {
 
 // ValidKeys returns the list of valid configuration keys.
 func ValidKeys() []string {
-	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url"}
+	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url", "config_url", "telemetry", "require_signature", "signature_public_key", "audit_log_destination"}
 }
 
 // DefaultValue returns the default value for a given config key.
@@ -121,6 +141,8 @@ func DefaultValue(key string) string {
 		return defaults.GithubBaseURL
 	case "policy_url":
 		return defaults.PolicyURL
+	case "telemetry", "require_signature":
+		return "false"
 	default:
 		return ""
 	}
@@ -128,12 +150,25 @@ func DefaultValue(key string) string {
 
 // FieldMap returns a map of config key names to their current values.
 func (c Config) FieldMap() map[string]string {
+	telemetryStr := "false"
+	if c.Telemetry {
+		telemetryStr = "true"
+	}
+	requireSigStr := "false"
+	if c.RequireSignature {
+		requireSigStr = "true"
+	}
 	return map[string]string{
-		"update_interval": c.UpdateInterval,
-		"github_token":    c.GithubToken,
-		"registry_url":    c.RegistryURL,
-		"github_base_url": c.GithubBaseURL,
-		"policy_url":      c.PolicyURL,
+		"update_interval":       c.UpdateInterval,
+		"github_token":          c.GithubToken,
+		"registry_url":          c.RegistryURL,
+		"github_base_url":       c.GithubBaseURL,
+		"policy_url":            c.PolicyURL,
+		"config_url":            c.ConfigURL,
+		"telemetry":             telemetryStr,
+		"require_signature":     requireSigStr,
+		"signature_public_key":  c.SignaturePublicKey,
+		"audit_log_destination": c.AuditLogDestination,
 	}
 }
 
@@ -151,6 +186,16 @@ func (c *Config) SetField(key, value string) error {
 		c.GithubBaseURL = value
 	case "policy_url":
 		c.PolicyURL = value
+	case "config_url":
+		c.ConfigURL = value
+	case "telemetry":
+		c.Telemetry = value == "true" || value == "1" || value == "yes"
+	case "require_signature":
+		c.RequireSignature = value == "true" || value == "1" || value == "yes"
+	case "signature_public_key":
+		c.SignaturePublicKey = value
+	case "audit_log_destination":
+		c.AuditLogDestination = value
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

@@ -23,12 +23,25 @@ func ValidateValue(key, value string) error {
 		if err := validateURL(key, value); err != nil {
 			return err
 		}
-	case "github_base_url", "policy_url":
+	case "config_url", "github_base_url", "policy_url":
 		if value == "" {
 			break
 		}
 		if err := validateURL(key, value); err != nil {
 			return err
+		}
+	case "telemetry", "require_signature":
+		valid := map[string]bool{"true": true, "false": true, "1": true, "0": true, "yes": true, "no": true}
+		if !valid[strings.ToLower(value)] {
+			return errors.New("invalid value for %s: %q (use true/false)", key, value)
+		}
+	case "audit_log_destination":
+		if value == "" || value == "stdout" || value == "syslog" {
+			break
+		}
+		// Must be a valid webhook URL
+		if err := validateURL(key, value); err != nil {
+			return errors.New("invalid value for %s: %q (use \"\", \"stdout\", \"syslog\", or a webhook URL)", key, value)
 		}
 	default:
 		// No validation for other keys (e.g. github_token)

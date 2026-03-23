@@ -18,12 +18,20 @@ func HistoryCmd() *cobra.Command {
 		Long: `Displays the audit trail of tool operations from ~/.scuta/history.jsonl.
 
 Use --limit to control how many entries are shown, or --tool to filter
-by a specific tool name.`,
+by a specific tool name.
+
+Use --export to export the full audit log:
+  scuta history --export                       Export as JSON to stdout
+  scuta history --export --format jsonl        Export as JSONL to stdout
+  scuta history --export --output audit.json   Export to a file`,
 		RunE: runHistory,
 	}
 
 	cmd.Flags().IntP("limit", "n", 10, "Maximum number of entries to show")
 	cmd.Flags().StringP("tool", "t", "", "Filter by tool name")
+	cmd.Flags().Bool("export", false, "Export audit log instead of displaying")
+	cmd.Flags().String("format", "json", "Export format: json or jsonl")
+	cmd.Flags().StringP("output", "o", "", "Export to file (default: stdout)")
 
 	return cmd
 }
@@ -36,6 +44,9 @@ func init() {
 func runHistory(cmd *cobra.Command, _ []string) error {
 	limitFlag, _ := cmd.Flags().GetInt("limit")
 	toolFlag, _ := cmd.Flags().GetString("tool")
+	exportFlag, _ := cmd.Flags().GetBool("export")
+	formatFlag, _ := cmd.Flags().GetString("format")
+	outputFlag, _ := cmd.Flags().GetString("output")
 
 	scutaDir, err := path.ScutaDir()
 	if err != nil {
@@ -61,7 +72,20 @@ func runHistory(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Apply limit
+	// Handle export
+	if exportFlag {
+		format := history.ExportFormat(formatFlag)
+		if outputFlag != "" {
+			if err := history.ExportToFile(entries, outputFlag, format); err != nil {
+				return err
+			}
+			output.Success("Exported %d entries to %s", len(entries), outputFlag)
+			return nil
+		}
+		return history.ExportToStdout(entries, format)
+	}
+
+	// Apply limit (only for display, not export)
 	if limitFlag > 0 && len(entries) > limitFlag {
 		entries = entries[:limitFlag]
 	}

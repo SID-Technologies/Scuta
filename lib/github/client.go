@@ -182,6 +182,8 @@ func (c *Client) DownloadChecksums(ctx context.Context, release *Release) (map[s
 }
 
 // DownloadAsset downloads a release asset to the given destination path.
+// If the response includes a Content-Length and output is in normal/verbose mode,
+// a progress bar is displayed during the download.
 func (c *Client) DownloadAsset(ctx context.Context, url string, dest string) error {
 	if err := c.validateDownloadURL(url); err != nil {
 		return err
@@ -213,8 +215,22 @@ func (c *Client) DownloadAsset(ctx context.Context, url string, dest string) err
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	// Show progress bar when content length is known and output is not quiet/JSON
+	var reader io.Reader = resp.Body
+	var progress *output.ProgressReader
+
+	showProgress := resp.ContentLength > 0 && !output.IsQuiet() && !output.IsJSON()
+	if showProgress {
+		progress = output.NewProgressReader(resp.Body, resp.ContentLength)
+		reader = progress
+	}
+
+	if _, err := io.Copy(f, reader); err != nil {
 		return errors.Wrap(err, "writing downloaded data")
+	}
+
+	if progress != nil {
+		progress.Complete("downloaded")
 	}
 
 	return nil

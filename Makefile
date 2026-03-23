@@ -39,3 +39,14 @@ coverage: ## Run tests with coverage report
 	@go test -timeout=5m -race -coverprofile=coverage.out ./...
 	@go tool cover -html=coverage.out -o coverage/coverage.html
 	@go tool cover -func coverage.out | tail -1
+
+##@ Documentation
+.PHONY: gen-man
+gen-man: ## Generate man pages to ./man/
+	@mkdir -p man
+	@go run . docs man -o ./man/
+
+.PHONY: gen-markdown
+gen-markdown: ## Generate markdown CLI docs to ./docs/cli/
+	@mkdir -p docs/cli
+	@go run . docs markdown -o ./docs/cli/

@@ -44,6 +44,16 @@ func runList(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Build merged install map (user + system state)
+	// User installations take precedence over system ones.
+	mergedTools := state.MergedTools(st, path.SystemStatePath())
+
+	// Build a lookup: tool name → ToolEntry
+	installMap := make(map[string]state.ToolEntry, len(mergedTools))
+	for _, entry := range mergedTools {
+		installMap[entry.Name] = entry
+	}
+
 	names := reg.Names()
 	sort.Strings(names)
 
@@ -52,7 +62,6 @@ func runList(_ *cobra.Command, _ []string) error {
 		var tools []output.ToolInfo
 		for _, name := range names {
 			tool, _ := reg.Get(name)
-			ts, installed := st.GetTool(name)
 
 			info := output.ToolInfo{
 				Name:        name,
@@ -61,9 +70,10 @@ func runList(_ *cobra.Command, _ []string) error {
 				Source:      reg.Source(name),
 			}
 
-			if installed {
-				info.Installed = ts.Version
+			if entry, installed := installMap[name]; installed {
+				info.Installed = entry.Version
 				info.Status = "installed"
+				info.InstallSource = entry.Source
 			} else {
 				info.Installed = ""
 				info.Status = "not installed"
@@ -77,23 +87,24 @@ func runList(_ *cobra.Command, _ []string) error {
 	}
 
 	// Table output mode
-	headers := []string{"TOOL", "VERSION", "STATUS", "SOURCE", "DESCRIPTION"}
+	headers := []string{"TOOL", "VERSION", "STATUS", "INSTALL", "SOURCE", "DESCRIPTION"}
 	var rows []output.TableRow
 
 	for _, name := range names {
 		tool, _ := reg.Get(name)
-		ts, installed := st.GetTool(name)
 
 		versionStr := "-"
 		statusStr := "not installed"
+		installSource := "-"
 
-		if installed {
-			versionStr = ts.Version
+		if entry, installed := installMap[name]; installed {
+			versionStr = entry.Version
 			statusStr = "installed"
+			installSource = entry.Source
 		}
 
 		rows = append(rows, output.TableRow{
-			Columns: []string{name, versionStr, statusStr, reg.Source(name), tool.Description},
+			Columns: []string{name, versionStr, statusStr, installSource, reg.Source(name), tool.Description},
 		})
 	}
 

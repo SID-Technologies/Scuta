@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/auth"
+	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/graph"
@@ -21,10 +23,28 @@ import (
 	"github.com/sid-technologies/scuta/lib/registry"
 	"github.com/sid-technologies/scuta/lib/state"
 	"github.com/sid-technologies/scuta/lib/suggest"
+	"github.com/sid-technologies/scuta/lib/telemetry"
 	workerqueue "github.com/sid-technologies/scuta/lib/worker_queue"
 
 	"github.com/spf13/cobra"
 )
+
+// isRoot returns true if the current process has root/admin privileges.
+func isRoot() bool {
+	if runtime.GOOS == "windows" {
+		// On Windows, check for admin by attempting to open a protected path.
+		// A simple heuristic: try to create a file in the system directory.
+		f, err := os.CreateTemp(os.Getenv("SystemRoot"), "scuta-admin-check-*")
+		if err != nil {
+			return false
+		}
+		name := f.Name()
+		f.Close()
+		os.Remove(name)
+		return true
+	}
+	return os.Getuid() == 0
+}
 
 func InstallCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -42,6 +62,7 @@ GitHub Releases, verifies checksum, and places it in ~/.scuta/bin/.`,
 	cmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
 	cmd.Flags().Bool("dry-run", false, "Show what would be installed without installing")
 	cmd.Flags().String("from", "", "Install from a local archive file (offline/air-gapped)")
+	cmd.Flags().Bool("system", false, "Install to system-wide location (requires root/admin)")
 
 	return cmd
 }
@@ -61,6 +82,14 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	skipVerifyFlag, _ := cmd.Flags().GetBool("skip-verify")
 	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")
 	fromFlag, _ := cmd.Flags().GetString("from")
+	systemFlag, _ := cmd.Flags().GetBool("system")
+
+	// System-wide install requires root/admin
+	if systemFlag {
+		if !isRoot() {
+			return exitcodes.NewError(exitcodes.General, "system-wide install requires root/admin privileges (try sudo)")
+		}
+	}
 
 	// Offline install from local archive
 	if fromFlag != "" {
@@ -107,14 +136,36 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 	defer lock.Release(scutaDir)
 
-	st, err := state.Load(scutaDir)
-	if err != nil {
-		return err
-	}
+	// For system installs, use system state and system bin dir
+	var st *state.State
+	var stateDir string
+	var inst *installer.Installer
 
 	token := auth.ResolveTokenWithConfig(scutaDir)
 	ghClient := newGitHubClient(token, scutaDir)
-	inst := installer.New(ghClient, scutaDir)
+
+	if systemFlag {
+		stateDir = path.SystemStateDir()
+		st, err = state.Load(stateDir)
+		if err != nil {
+			return err
+		}
+		inst = installer.NewWithBinDir(ghClient, scutaDir, path.SystemBinDir())
+		output.Info("Installing to system-wide location: %s", path.SystemBinDir())
+	} else {
+		stateDir = scutaDir
+		st, err = state.Load(scutaDir)
+		if err != nil {
+			return err
+		}
+		inst = installer.New(ghClient, scutaDir)
+	}
+
+	// Configure signature verification from config
+	cfg, cfgLoadErr := config.Load(scutaDir)
+	if cfgLoadErr == nil && (cfg.RequireSignature || cfg.SignaturePublicKey != "") {
+		inst.SetSignatureVerification(cfg.RequireSignature, []byte(cfg.SignaturePublicKey))
+	}
 
 	start := time.Now()
 
@@ -135,8 +186,8 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Save state
-	if err := st.Save(scutaDir); err != nil {
+	// Save state (to system dir for --system, user dir otherwise)
+	if err := st.Save(stateDir); err != nil {
 		output.Error("Failed to save state: %v", err)
 	}
 
@@ -145,6 +196,12 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	entry := history.NewEntry("install", allSuccess, time.Since(start), toolResults)
 	if err := history.Record(scutaDir, entry); err != nil {
 		output.Debugf("Failed to record history: %v", err)
+	}
+
+	// Telemetry (best-effort, uses merged config for effective settings)
+	mergedCfg, mergedErr := config.LoadWithMerge(scutaDir)
+	if mergedErr == nil {
+		_ = telemetry.Record(scutaDir, mergedCfg.Telemetry, "install")
 	}
 
 	// Print summary

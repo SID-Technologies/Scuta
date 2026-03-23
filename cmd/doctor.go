@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/sid-technologies/scuta/lib/auth"
+	"github.com/sid-technologies/scuta/lib/config"
+	"github.com/sid-technologies/scuta/lib/cve"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/registry"
@@ -24,9 +26,12 @@ func DoctorCmd() *cobra.Command {
   - State file is valid
   - GitHub authentication is configured
   - Registry is reachable
-  - Policy compliance (version constraints)`,
+  - Policy compliance (version constraints)
+  - Known vulnerabilities (via OSV.dev)`,
 		RunE: runDoctor,
 	}
+
+	cmd.Flags().Bool("skip-cve", false, "Skip CVE vulnerability check (for offline environments)")
 
 	return cmd
 }
@@ -36,7 +41,7 @@ func init() {
 	rootCmd.AddCommand(DoctorCmd())
 }
 
-func runDoctor(_ *cobra.Command, _ []string) error {
+func runDoctor(cmd *cobra.Command, _ []string) error {
 	output.Header("Scuta Doctor")
 
 	issues := 0
@@ -157,6 +162,41 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		}
 	} else {
 		output.Dimmed("  No policy configured")
+	}
+
+	// 8. CVE vulnerability check
+	skipCVE, _ := cmd.Flags().GetBool("skip-cve")
+	if skipCVE {
+		output.Dimmed("  CVE check skipped (--skip-cve)")
+	} else if st != nil && len(st.Tools) > 0 {
+		cveIssues := 0
+		for name, ts := range st.Tools {
+			vulns, err := cve.CheckWithCache(scutaDir, name, ts.Version, "Go")
+			if err != nil {
+				output.Debugf("CVE check failed for %s: %v", name, err)
+				continue
+			}
+			if len(vulns) > 0 {
+				for _, v := range vulns {
+					output.PrintCheck(false, "%s %s: %s (%s)", name, ts.Version, v.ID, v.Summary)
+					cveIssues++
+					issues++
+				}
+			}
+		}
+		if cveIssues == 0 {
+			output.PrintCheck(true, "No known vulnerabilities in installed tools")
+		}
+	}
+
+	// 9. Telemetry status
+	cfg, cfgErr := config.LoadWithMerge(scutaDir)
+	if cfgErr == nil {
+		if cfg.Telemetry {
+			output.PrintCheck(true, "Telemetry is enabled (opt-in)")
+		} else {
+			output.Dimmed("  Telemetry is disabled (opt-in via: scuta config set telemetry true)")
+		}
 	}
 
 	// Summary

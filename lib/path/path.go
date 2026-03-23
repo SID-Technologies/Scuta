@@ -4,6 +4,7 @@ package path
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/sid-technologies/scuta/lib/errors"
 )
@@ -43,4 +44,29 @@ func EnsureDir() (string, error) {
 	}
 
 	return dir, nil
+}
+
+// SystemBinDir returns the system-wide binary install path.
+// On Unix: /usr/local/bin
+// On Windows: C:\Program Files\Scuta\bin
+func SystemBinDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("ProgramFiles"), "Scuta", "bin")
+	}
+	return "/usr/local/bin"
+}
+
+// SystemStateDir returns the system-wide state directory.
+// On Unix: /etc/scuta
+// On Windows: C:\ProgramData\Scuta
+func SystemStateDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("ProgramData"), "Scuta")
+	}
+	return "/etc/scuta"
+}
+
+// SystemStatePath returns the path to the system-wide state file.
+func SystemStatePath() string {
+	return filepath.Join(SystemStateDir(), "state.json")
 }

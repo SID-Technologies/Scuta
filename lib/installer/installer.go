@@ -19,9 +19,11 @@ import (
 
 // Installer manages downloading and installing tool binaries.
 type Installer struct {
-	github   *github.Client
-	scutaDir string
-	binDir   string
+	github           *github.Client
+	scutaDir         string
+	binDir           string
+	requireSignature bool
+	signaturePubKey  []byte
 }
 
 // InstallResult holds the outcome of an install operation.
@@ -30,13 +32,30 @@ type InstallResult struct {
 	BinaryPath string
 }
 
-// New creates an Installer.
+// New creates an Installer that installs to ~/.scuta/bin/.
 func New(ghClient *github.Client, scutaDir string) *Installer {
 	return &Installer{
 		github:   ghClient,
 		scutaDir: scutaDir,
 		binDir:   filepath.Join(scutaDir, "bin"),
 	}
+}
+
+// NewWithBinDir creates an Installer that installs to a custom bin directory.
+// Used for system-wide installs (e.g. /usr/local/bin).
+func NewWithBinDir(ghClient *github.Client, scutaDir string, binDir string) *Installer {
+	return &Installer{
+		github:   ghClient,
+		scutaDir: scutaDir,
+		binDir:   binDir,
+	}
+}
+
+// SetSignatureVerification configures signature verification on the installer.
+// When pubKey is non-empty, signatures will be checked after checksum verification.
+func (inst *Installer) SetSignatureVerification(requireSig bool, pubKey []byte) {
+	inst.requireSignature = requireSig
+	inst.signaturePubKey = pubKey
 }
 
 // Install downloads and installs a tool binary from GitHub Releases.
@@ -64,7 +83,7 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 	}
 
 	version := github.NormalizeVersion(release.TagName)
-	binaryPath := filepath.Join(inst.binDir, toolName)
+	binaryPath := filepath.Join(inst.binDir, binaryName(toolName))
 
 	// Check if already installed at this version
 	if !force {
@@ -112,6 +131,15 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 			return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
 		}
 		output.Debugf("Checksum verified for %s", asset.Name)
+	}
+
+	// Signature verification (when public key is configured)
+	if len(inst.signaturePubKey) > 0 {
+		if err := DownloadAndVerifySignature(ctx, inst.github, release, asset.Name, archivePath, inst.signaturePubKey, inst.requireSignature); err != nil {
+			return nil, errors.Wrap(err, "signature verification failed for %s", toolName)
+		}
+	} else if inst.requireSignature {
+		return nil, errors.New("signature required but no public key configured (set signature_public_key in config)")
 	}
 
 	// Check for cancellation before extraction
@@ -222,7 +250,7 @@ func (inst *Installer) InstallFromArchive(toolName string, archivePath string) (
 	}
 
 	// Atomic install: copy to temp, then rename
-	binaryPath := filepath.Join(inst.binDir, toolName)
+	binaryPath := filepath.Join(inst.binDir, binaryName(toolName))
 	tempPath := binaryPath + ".tmp"
 	if err := copyFile(binarySrc, tempPath); err != nil {
 		os.Remove(tempPath)
@@ -287,7 +315,7 @@ func (inst *Installer) Uninstall(toolName string) error {
 		return err
 	}
 
-	binaryPath := filepath.Join(inst.binDir, toolName)
+	binaryPath := filepath.Join(inst.binDir, binaryName(toolName))
 
 	if err := os.Remove(binaryPath); err != nil {
 		if os.IsNotExist(err) {
@@ -446,17 +474,37 @@ func validateToolName(name string) error {
 	return nil
 }
 
+// binaryName returns the platform-appropriate binary name.
+// On Windows, it appends ".exe" if not already present.
+func binaryName(toolName string) string {
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(toolName), ".exe") {
+		return toolName + ".exe"
+	}
+	return toolName
+}
+
 // findBinary looks for an executable file matching the tool name in the given directory.
 // It checks the root level and one level of nesting.
+// On Windows, it also checks for the tool name with an .exe extension.
+// As a fallback, it matches files prefixed with the tool name (e.g., "pilum_v1.0.0_darwin_arm64").
 func findBinary(dir string, toolName string) (string, error) {
-	// Check root level first
-	rootPath := filepath.Join(dir, toolName)
-	if info, err := os.Stat(rootPath); err == nil && !info.IsDir() {
-		return rootPath, nil
+	// Build candidate names: exact name, and on Windows also with .exe
+	candidates := []string{toolName}
+	if runtime.GOOS == "windows" {
+		candidates = append(candidates, toolName+".exe")
+	}
+
+	// Check root level first (exact match)
+	for _, name := range candidates {
+		rootPath := filepath.Join(dir, name)
+		if info, err := os.Stat(rootPath); err == nil && !info.IsDir() {
+			return rootPath, nil
+		}
 	}
 
 	// Walk to find it (one level deep max)
 	var found string
+	var prefixMatch string // fallback: file starting with toolName_
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -479,6 +527,20 @@ func findBinary(dir string, toolName string) (string, error) {
 			return filepath.SkipAll
 		}
 
+		// On Windows, also match with .exe suffix
+		if runtime.GOOS == "windows" {
+			exeName := toolName + ".exe"
+			if strings.EqualFold(baseName, exeName) || strings.EqualFold(nameWithoutExt, toolName) {
+				found = path
+				return filepath.SkipAll
+			}
+		}
+
+		// Fallback: match files prefixed with toolName_ (e.g., "pilum_v1.0.0_darwin_arm64")
+		if prefixMatch == "" && strings.HasPrefix(baseName, toolName+"_") && !info.IsDir() {
+			prefixMatch = path
+		}
+
 		return nil
 	})
 
@@ -486,11 +548,16 @@ func findBinary(dir string, toolName string) (string, error) {
 		return "", errors.Wrap(err, "searching for binary")
 	}
 
-	if found == "" {
-		return "", errors.New("binary %q not found in extracted archive", toolName)
+	if found != "" {
+		return found, nil
 	}
 
-	return found, nil
+	// Use prefix match as fallback
+	if prefixMatch != "" {
+		return prefixMatch, nil
+	}
+
+	return "", errors.New("binary %q not found in extracted archive", toolName)
 }
 
 // copyFile copies a file from src to dst.

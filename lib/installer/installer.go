@@ -32,6 +32,17 @@ type InstallResult struct {
 	BinaryPath string
 }
 
+// InstallOpts provides extended options for tool installation.
+// When set, these override the default GoReleaser conventions.
+type InstallOpts struct {
+	AssetTemplate string            // Template for asset name resolution
+	BinName       string            // Binary name if different from tool name
+	OSMap         map[string]string // OS name mappings (e.g., darwin -> Darwin)
+	ArchMap       map[string]string // Arch name mappings (e.g., amd64 -> x86_64)
+	VersionPrefix string            // Version prefix for tags (default "v", "none" for no prefix)
+	BestEffort    bool              // If true, warn on missing checksums instead of failing
+}
+
 // New creates an Installer that installs to ~/.scuta/bin/.
 func New(ghClient *github.Client, scutaDir string) *Installer {
 	return &Installer{
@@ -199,6 +210,209 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 	}
 
 	output.Debugf("Installed %s %s to %s", toolName, version, binaryPath)
+
+	return &InstallResult{
+		Version:    version,
+		BinaryPath: binaryPath,
+	}, nil
+}
+
+// InstallWithOpts downloads and installs a tool binary with extended options.
+// This supports non-GoReleaser naming conventions via asset templates, custom binary names, etc.
+func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, repo string, targetVersion string, force bool, skipVerify bool, opts InstallOpts) (*InstallResult, error) {
+	if err := validateToolName(toolName); err != nil {
+		return nil, err
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	// Get the release (handle version prefix)
+	var release *github.Release
+	var err error
+
+	if targetVersion != "" {
+		tag := applyVersionPrefix(targetVersion, opts.VersionPrefix)
+		release, err = inst.github.GetReleaseByTag(ctx, repo, tag)
+	} else {
+		release, err = inst.github.GetLatestRelease(ctx, repo)
+	}
+	if err != nil {
+		return nil, errors.Wrap(err, "fetching release for %s", toolName)
+	}
+
+	version := github.NormalizeVersion(release.TagName)
+
+	// Determine the effective binary name
+	effectiveBinName := toolName
+	if opts.BinName != "" {
+		effectiveBinName = opts.BinName
+	}
+	binaryPath := filepath.Join(inst.binDir, binaryName(effectiveBinName))
+
+	// Check if already installed at this version
+	if !force {
+		if _, err := os.Stat(binaryPath); err == nil {
+			output.Debugf("%s already exists at %s", toolName, binaryPath)
+		}
+	}
+
+	// Find matching asset using template or heuristic
+	assetOpts := github.AssetOptions{
+		Template: opts.AssetTemplate,
+		OSMap:    opts.OSMap,
+		ArchMap:  opts.ArchMap,
+		Version:  version,
+		ToolName: toolName,
+		BinName:  effectiveBinName,
+	}
+
+	asset, err := github.ResolveAsset(release.Assets, runtime.GOOS, runtime.GOARCH, assetOpts)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding asset for %s", toolName)
+	}
+
+	output.Debugf("Found asset: %s (%d bytes)", asset.Name, asset.Size)
+
+	// Download to temp directory
+	tmpDir, err := os.MkdirTemp("", "scuta-install-*")
+	if err != nil {
+		return nil, errors.Wrap(err, "creating temp directory")
+	}
+	defer os.RemoveAll(tmpDir)
+
+	archivePath := filepath.Join(tmpDir, asset.Name)
+	if err := inst.github.DownloadAsset(ctx, asset.BrowserDownloadURL, archivePath); err != nil {
+		return nil, errors.Wrap(err, "downloading %s", asset.Name)
+	}
+
+	// Checksum verification
+	if skipVerify {
+		output.Warning("Skipping checksum verification (--skip-verify)")
+	} else {
+		checksums, csErr := inst.github.DownloadChecksums(ctx, release)
+		if csErr != nil {
+			if !opts.BestEffort {
+				return nil, errors.Wrap(csErr, "checksum verification failed for %s: could not download checksums", toolName)
+			}
+			output.Warning("Could not download checksums for %s: %v", toolName, csErr)
+		} else if checksums == nil {
+			if !opts.BestEffort {
+				return nil, errors.New("checksum verification failed for %s: no checksums file in release (use --skip-verify to override)", toolName)
+			}
+			output.Warning("No checksums file in release for %s — skipping verification", toolName)
+		} else {
+			expectedHash, ok := checksums[asset.Name]
+			if !ok {
+				if !opts.BestEffort {
+					return nil, errors.New("checksum verification failed for %s: no entry for %s in checksums file (use --skip-verify to override)", toolName, asset.Name)
+				}
+				output.Warning("No checksum entry for %s — skipping verification", asset.Name)
+			} else {
+				if err := VerifyChecksum(archivePath, expectedHash); err != nil {
+					return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
+				}
+				output.Debugf("Checksum verified for %s", asset.Name)
+			}
+		}
+	}
+
+	// Signature verification
+	if len(inst.signaturePubKey) > 0 {
+		if err := DownloadAndVerifySignature(ctx, inst.github, release, asset.Name, archivePath, inst.signaturePubKey, inst.requireSignature); err != nil {
+			return nil, errors.Wrap(err, "signature verification failed for %s", toolName)
+		}
+	} else if inst.requireSignature {
+		return nil, errors.New("signature required but no public key configured (set signature_public_key in config)")
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	// Ensure bin directory exists
+	if err := os.MkdirAll(inst.binDir, 0o700); err != nil {
+		return nil, errors.Wrap(err, "creating bin directory")
+	}
+
+	// Handle raw binaries (no archive extraction needed)
+	if github.IsRawBinary(asset.Name) {
+		return inst.installRawBinary(archivePath, binaryPath, effectiveBinName, version)
+	}
+
+	// Extract archive
+	extractDir := filepath.Join(tmpDir, "extracted")
+	if err := os.MkdirAll(extractDir, 0o755); err != nil {
+		return nil, errors.Wrap(err, "creating extract directory")
+	}
+
+	if strings.HasSuffix(strings.ToLower(asset.Name), ".tar.gz") || strings.HasSuffix(strings.ToLower(asset.Name), ".tgz") {
+		if err := extractTarGz(archivePath, extractDir); err != nil {
+			return nil, errors.Wrap(err, "extracting tar.gz")
+		}
+	} else if strings.HasSuffix(strings.ToLower(asset.Name), ".zip") {
+		if err := extractZip(archivePath, extractDir); err != nil {
+			return nil, errors.Wrap(err, "extracting zip")
+		}
+	} else {
+		return nil, errors.New("unsupported archive format: %s", asset.Name)
+	}
+
+	// Find the binary in extracted contents
+	binarySrc, err := findBinaryWithName(extractDir, toolName, effectiveBinName)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding binary in archive")
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	// Atomic install: copy to temp, then rename
+	tempPath := binaryPath + ".tmp"
+	if err := copyFile(binarySrc, tempPath); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "installing binary")
+	}
+
+	if err := os.Chmod(tempPath, 0o755); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "setting binary permissions")
+	}
+
+	if err := os.Rename(tempPath, binaryPath); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "atomic rename of binary")
+	}
+
+	output.Debugf("Installed %s %s to %s", effectiveBinName, version, binaryPath)
+
+	return &InstallResult{
+		Version:    version,
+		BinaryPath: binaryPath,
+	}, nil
+}
+
+// installRawBinary handles installing a raw binary (not an archive).
+func (*Installer) installRawBinary(srcPath, binaryPath, binName, version string) (*InstallResult, error) {
+	tempPath := binaryPath + ".tmp"
+	if err := copyFile(srcPath, tempPath); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "installing raw binary")
+	}
+
+	if err := os.Chmod(tempPath, 0o755); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "setting binary permissions")
+	}
+
+	if err := os.Rename(tempPath, binaryPath); err != nil {
+		os.Remove(tempPath)
+		return nil, errors.Wrap(err, "atomic rename of binary")
+	}
+
+	output.Debugf("Installed raw binary %s %s to %s", binName, version, binaryPath)
 
 	return &InstallResult{
 		Version:    version,
@@ -474,6 +688,12 @@ func validateToolName(name string) error {
 	return nil
 }
 
+// BinaryName returns the platform-appropriate binary name.
+// On Windows, it appends ".exe" if not already present.
+func BinaryName(toolName string) string {
+	return binaryName(toolName)
+}
+
 // binaryName returns the platform-appropriate binary name.
 // On Windows, it appends ".exe" if not already present.
 func binaryName(toolName string) string {
@@ -558,6 +778,43 @@ func findBinary(dir string, toolName string) (string, error) {
 	}
 
 	return "", errors.New("binary %q not found in extracted archive", toolName)
+}
+
+// applyVersionPrefix adds the appropriate prefix to a version string for tag lookup.
+// If prefix is "none", no prefix is added. If prefix is empty, "v" is used (default).
+// Otherwise, the specified prefix is used.
+func applyVersionPrefix(version, prefix string) string {
+	// Strip existing "v" prefix if present
+	version = strings.TrimPrefix(version, "v")
+
+	if prefix == "none" {
+		return version
+	}
+
+	if prefix == "" {
+		return "v" + version
+	}
+
+	return prefix + version
+}
+
+// findBinaryWithName looks for a binary matching either the tool name or an alternate bin name.
+// It checks the bin name first (if different from tool name), then falls back to the tool name.
+func findBinaryWithName(dir, toolName, binName string) (string, error) {
+	// If bin name differs from tool name, try the bin name first
+	if binName != "" && binName != toolName {
+		if path, err := findBinary(dir, binName); err == nil {
+			return path, nil
+		}
+	}
+
+	// Fall back to tool name
+	return findBinary(dir, toolName)
+}
+
+// CopyFile copies a file from src to dst.
+func CopyFile(src, dst string) error {
+	return copyFile(src, dst)
 }
 
 // copyFile copies a file from src to dst.

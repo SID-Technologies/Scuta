@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,10 +50,13 @@ func isRoot() bool {
 
 func InstallCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "install <tool>",
-		Short: "Install a tool from the registry",
+		Use:   "install <tool | owner/repo>",
+		Short: "Install a tool from the registry or any GitHub repo",
 		Long: `Downloads the correct binary for your OS/architecture from the tool's
-GitHub Releases, verifies checksum, and places it in ~/.scuta/bin/.`,
+GitHub Releases, verifies checksum, and places it in ~/.scuta/bin/.
+
+Use a registry name (e.g., "fzf") or a GitHub owner/repo (e.g., "junegunn/fzf")
+to install any tool that publishes GitHub Releases.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runInstall,
 	}
@@ -96,6 +101,11 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return runInstallFromArchive(ctx, args, fromFlag)
 	}
 
+	// Direct install from owner/repo (e.g., "scuta install junegunn/fzf")
+	if !allFlag && len(args) == 1 && strings.Contains(args[0], "/") {
+		return runInstallDirect(ctx, cmd, args[0], versionFlag, forceFlag, skipVerifyFlag, systemFlag)
+	}
+
 	reg, err := registry.Load()
 	if err != nil {
 		return err
@@ -116,7 +126,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		}
 		toolNames = []string{toolName}
 	} else {
-		return exitcodes.NewError(exitcodes.InvalidArgs, "specify a tool name or use --all")
+		return exitcodes.NewError(exitcodes.InvalidArgs, "specify a tool name, owner/repo, or use --all")
 	}
 
 	// Sort by dependency order using the graph
@@ -397,7 +407,16 @@ func installOneTool(
 
 	output.Info("Installing %s...", toolName)
 
-	result, err := inst.Install(ctx, toolName, tool.Repo, versionFlag, forceFlag, skipVerifyFlag)
+	// Use InstallWithOpts when tool has extended options, otherwise use standard Install
+	var result *installer.InstallResult
+	var err error
+
+	if hasExtendedOpts(tool) {
+		opts := buildInstallOpts(tool)
+		result, err = inst.InstallWithOpts(ctx, toolName, tool.Repo, versionFlag, forceFlag, skipVerifyFlag, opts)
+	} else {
+		result, err = inst.Install(ctx, toolName, tool.Repo, versionFlag, forceFlag, skipVerifyFlag)
+	}
 	if err != nil {
 		output.Error("Failed to install %s: %v", toolName, err)
 		return history.ToolResult{
@@ -413,8 +432,12 @@ func installOneTool(
 	if versionFlag == "" {
 		if v := pol.CheckToolVersion(toolName, result.Version); v != nil {
 			output.Error("Policy violation for %s: %s", toolName, v.Message)
-			// Remove the just-installed binary
-			_ = inst.Uninstall(toolName)
+			// Remove the just-installed binary — use effective bin name
+			uninstallName := toolName
+			if tool.Bin != "" {
+				uninstallName = tool.Bin
+			}
+			_ = inst.Uninstall(uninstallName)
 			return history.ToolResult{
 				Name:     toolName,
 				Action:   "install",
@@ -438,6 +461,22 @@ func installOneTool(
 		Version:  result.Version,
 		Success:  true,
 		Duration: time.Since(toolStart).Round(time.Millisecond).String(),
+	}
+}
+
+// hasExtendedOpts returns true if the tool definition has any extended asset options.
+func hasExtendedOpts(tool registry.Tool) bool {
+	return tool.Asset != "" || tool.Bin != "" || len(tool.OSMap) > 0 || len(tool.ArchMap) > 0 || tool.VersionPrefix != ""
+}
+
+// buildInstallOpts creates InstallOpts from a registry Tool definition.
+func buildInstallOpts(tool registry.Tool) installer.InstallOpts {
+	return installer.InstallOpts{
+		AssetTemplate: tool.Asset,
+		BinName:       tool.Bin,
+		OSMap:         tool.OSMap,
+		ArchMap:       tool.ArchMap,
+		VersionPrefix: tool.VersionPrefix,
 	}
 }
 
@@ -601,5 +640,204 @@ func runInstallFromArchive(ctx context.Context, args []string, archivePath strin
 	_ = ctx // context not needed for local install but kept for signature consistency
 
 	output.Success("Installed %s %s (from local archive)", toolName, result.Version)
+	return nil
+}
+
+// runInstallDirect installs a tool directly from a GitHub repo (owner/repo format).
+// The tool does not need to be in the registry. Asset matching uses heuristics.
+func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, versionFlag string, forceFlag bool, skipVerifyFlag bool, systemFlag bool) error {
+	parts := strings.SplitN(repoArg, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("invalid repo format %q — expected owner/repo", repoArg))
+	}
+
+	repo := repoArg
+	toolName := strings.ToLower(parts[1])
+
+	scutaDir, err := path.ScutaDir()
+	if err != nil {
+		return err
+	}
+
+	token := auth.ResolveTokenWithConfig(scutaDir)
+	ghClient := newGitHubClient(token, scutaDir)
+
+	// Acquire install lock
+	if err := lock.Acquire(scutaDir, "install", []string{toolName}, forceFlag); err != nil {
+		return err
+	}
+	defer lock.Release(scutaDir)
+
+	// Determine state and installer based on --system flag
+	var st *state.State
+	var stateDir string
+	var inst *installer.Installer
+
+	if systemFlag {
+		stateDir = path.SystemStateDir()
+		st, err = state.Load(stateDir)
+		if err != nil {
+			return err
+		}
+		inst = installer.NewWithBinDir(ghClient, scutaDir, path.SystemBinDir())
+	} else {
+		stateDir = scutaDir
+		st, err = state.Load(scutaDir)
+		if err != nil {
+			return err
+		}
+		inst = installer.New(ghClient, scutaDir)
+	}
+
+	// Check if already installed (skip unless force)
+	if !forceFlag && versionFlag == "" {
+		if ts, installed := st.GetTool(toolName); installed {
+			output.Info("%s %s already installed (use --force to reinstall)", toolName, ts.Version)
+			return nil
+		}
+	}
+
+	output.Info("Installing %s from %s...", toolName, repo)
+
+	// Get the release
+	var release *github.Release
+	if versionFlag != "" {
+		release, err = ghClient.GetRelease(ctx, repo, versionFlag)
+	} else {
+		release, err = ghClient.GetLatestRelease(ctx, repo)
+	}
+	if err != nil {
+		return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("failed to fetch release for %s: %v", repo, err))
+	}
+
+	version := github.NormalizeVersion(release.TagName)
+
+	// Try to find a matching asset using heuristic matching
+	asset, err := github.FindAssetHeuristic(release.Assets, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("no matching asset found for %s/%s in %s %s: %v", runtime.GOOS, runtime.GOARCH, repo, version, err))
+	}
+
+	output.Debugf("Found asset: %s (%d bytes)", asset.Name, asset.Size)
+
+	// Download to temp directory
+	tmpDir, err := os.MkdirTemp("", "scuta-direct-*")
+	if err != nil {
+		return exitcodes.NewError(exitcodes.IO, fmt.Sprintf("creating temp directory: %v", err))
+	}
+	defer os.RemoveAll(tmpDir)
+
+	archivePath := filepath.Join(tmpDir, asset.Name)
+	if err := ghClient.DownloadAsset(ctx, asset.BrowserDownloadURL, archivePath); err != nil {
+		return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("downloading %s: %v", asset.Name, err))
+	}
+
+	// Best-effort checksum verification for unregistered tools
+	if skipVerifyFlag {
+		output.Warning("Skipping checksum verification (--skip-verify)")
+	} else {
+		checksums, csErr := ghClient.DownloadChecksums(ctx, release)
+		if csErr != nil {
+			output.Warning("Could not download checksums for %s: %v", toolName, csErr)
+		} else if checksums == nil {
+			output.Warning("No checksums file found for %s — skipping verification", toolName)
+		} else {
+			expectedHash, ok := checksums[asset.Name]
+			if !ok {
+				output.Warning("No checksum entry for %s — skipping verification", asset.Name)
+			} else {
+				if verifyErr := installer.VerifyChecksum(archivePath, expectedHash); verifyErr != nil {
+					return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("checksum mismatch for %s: %v", toolName, verifyErr))
+				}
+				output.Debugf("Checksum verified for %s", asset.Name)
+			}
+		}
+	}
+
+	if ctx.Err() != nil {
+		return nil
+	}
+
+	// Determine bin directory
+	binDir := filepath.Join(scutaDir, "bin")
+	if systemFlag {
+		binDir = path.SystemBinDir()
+	}
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		return exitcodes.NewError(exitcodes.IO, fmt.Sprintf("creating bin directory: %v", err))
+	}
+
+	binaryPath := filepath.Join(binDir, installer.BinaryName(toolName))
+
+	// Handle raw binaries vs archives
+	if github.IsRawBinary(asset.Name) {
+		// Raw binary — copy directly
+		tempPath := binaryPath + ".tmp"
+		if err := installer.CopyFile(archivePath, tempPath); err != nil {
+			os.Remove(tempPath)
+			return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("installing binary: %v", err))
+		}
+		if err := os.Chmod(tempPath, 0o755); err != nil {
+			os.Remove(tempPath)
+			return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("setting permissions: %v", err))
+		}
+		if err := os.Rename(tempPath, binaryPath); err != nil {
+			os.Remove(tempPath)
+			return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("installing binary: %v", err))
+		}
+	} else {
+		// Archive — extract and find binary
+		result, installErr := inst.InstallFromArchive(toolName, archivePath)
+		if installErr != nil {
+			return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("failed to install %s: %v", toolName, installErr))
+		}
+		binaryPath = result.BinaryPath
+	}
+
+	// Update state with repo info
+	st.SetTool(toolName, state.ToolState{
+		Version:     version,
+		InstalledAt: time.Now(),
+		BinaryPath:  binaryPath,
+		Repo:        repo,
+	})
+
+	if err := st.Save(stateDir); err != nil {
+		output.Error("Failed to save state: %v", err)
+	}
+
+	// Auto-add to local registry so "scuta update" works later
+	localReg, err := registry.LoadLocal(scutaDir)
+	if err != nil {
+		output.Debugf("Failed to load local registry: %v", err)
+	} else {
+		if _, exists := localReg.Tools[toolName]; !exists {
+			localReg.Tools[toolName] = registry.Tool{
+				Description: fmt.Sprintf("Installed from %s", repo),
+				Repo:        repo,
+			}
+			if saveErr := registry.SaveLocal(scutaDir, localReg); saveErr != nil {
+				output.Debugf("Failed to save local registry: %v", saveErr)
+			}
+		}
+	}
+
+	// Record history
+	start := time.Now()
+	entry := history.NewEntry("install", true, time.Since(start), []history.ToolResult{
+		{
+			Name:    toolName,
+			Action:  "install",
+			Version: version,
+			Success: true,
+		},
+	})
+	if err := history.Record(scutaDir, entry); err != nil {
+		output.Debugf("Failed to record history: %v", err)
+	}
+
+	_ = cmd // kept for signature consistency
+
+	output.Success("Installed %s %s (from %s)", toolName, version, repo)
 	return nil
 }

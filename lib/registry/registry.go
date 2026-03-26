@@ -81,10 +81,15 @@ func remoteURL() string {
 
 // Tool represents a single tool in the registry.
 type Tool struct {
-	Description string   `yaml:"description"`
-	Repo        string   `yaml:"repo"`
-	Homebrew    string   `yaml:"homebrew,omitempty"`
-	DependsOn   []string `yaml:"depends_on,omitempty"`
+	Description   string            `yaml:"description"`
+	Repo          string            `yaml:"repo"`
+	Homebrew      string            `yaml:"homebrew,omitempty"`
+	DependsOn     []string          `yaml:"depends_on,omitempty"`
+	Asset         string            `yaml:"asset,omitempty"`          // Template: "fzf-{{.Version}}-{{.OS}}_{{.Arch}}.tar.gz"
+	Bin           string            `yaml:"bin,omitempty"`            // Binary name if different from tool name (e.g., "rg" for ripgrep)
+	OSMap         map[string]string `yaml:"os_map,omitempty"`         // darwin -> Darwin, linux -> Linux
+	ArchMap       map[string]string `yaml:"arch_map,omitempty"`       // amd64 -> x86_64, arm64 -> aarch64
+	VersionPrefix string            `yaml:"version_prefix,omitempty"` // Default "v", set "none" for no prefix
 }
 
 // Registry holds the parsed tool manifest.

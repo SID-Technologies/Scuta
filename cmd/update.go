@@ -88,25 +88,31 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if len(args) == 1 {
 		toolName := args[0]
 
-		// Validate tool exists in registry
-		if _, ok := reg.Get(toolName); !ok {
-			suggestion := suggest.FormatSuggestion(toolName, reg.Names())
-			if suggestion != "" {
-				return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q — %s", toolName, suggestion))
+		// Check if it's installed first
+		ts, installed := st.GetTool(toolName)
+		if !installed {
+			// Not installed — check registry for suggestion
+			if _, ok := reg.Get(toolName); !ok {
+				suggestion := suggest.FormatSuggestion(toolName, reg.Names())
+				if suggestion != "" {
+					return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q — %s", toolName, suggestion))
+				}
 			}
-			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q. Run 'scuta list' to see available tools", toolName))
+			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("%s is not installed. Run 'scuta install %s' first", toolName, toolName))
 		}
 
-		// Check if it's installed
-		if _, installed := st.GetTool(toolName); !installed {
-			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("%s is not installed. Run 'scuta install %s' first", toolName, toolName))
+		// Validate tool exists in registry OR has a repo in state (direct-installed)
+		if _, ok := reg.Get(toolName); !ok && ts.Repo == "" {
+			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("tool %q is installed but not in registry and has no repo info — reinstall with 'scuta install owner/repo'", toolName))
 		}
 
 		toolNames = []string{toolName}
 	} else {
-		// Update all installed tools
-		for name := range st.Tools {
+		// Update all installed tools (registry + direct-installed with repo info)
+		for name, ts := range st.Tools {
 			if _, ok := reg.Get(name); ok {
+				toolNames = append(toolNames, name)
+			} else if ts.Repo != "" {
 				toolNames = append(toolNames, name)
 			}
 		}
@@ -180,8 +186,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	successCount := 0
 
 	for _, u := range toUpdate {
-		tool, _ := reg.Get(u.Name)
+		tool, inRegistry := reg.Get(u.Name)
 		toolStart := time.Now()
+
+		// Determine repo: prefer registry, fall back to update info (which includes state repo)
+		repo := u.Repo
+		if inRegistry {
+			repo = tool.Repo
+		}
 
 		// Policy check before updating
 		if v := pol.CheckToolVersion(u.Name, u.LatestVersion); v != nil {
@@ -202,7 +214,15 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			break
 		}
 
-		result, err := inst.Install(ctx, u.Name, tool.Repo, "", true, skipVerifyFlag)
+		var result *installer.InstallResult
+		var err error
+
+		if inRegistry && hasExtendedOpts(tool) {
+			opts := buildInstallOpts(tool)
+			result, err = inst.InstallWithOpts(ctx, u.Name, repo, "", true, skipVerifyFlag, opts)
+		} else {
+			result, err = inst.Install(ctx, u.Name, repo, "", true, skipVerifyFlag)
+		}
 		if err != nil {
 			output.Error("Failed to update %s: %v", u.Name, err)
 			toolResults = append(toolResults, history.ToolResult{
@@ -220,6 +240,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			InstalledAt: st.Tools[u.Name].InstalledAt,
 			UpdatedAt:   time.Now(),
 			BinaryPath:  result.BinaryPath,
+			Repo:        st.Tools[u.Name].Repo,
 		})
 
 		output.Success("Updated %s %s → %s", u.Name, u.CurrentVersion, result.Version)

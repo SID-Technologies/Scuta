@@ -38,16 +38,22 @@ func New(ghClient *github.Client) *Updater {
 }
 
 // CheckForUpdates checks all installed tools for available updates.
+// It checks tools from both the registry and direct-installed tools (via state.Repo).
 func (u *Updater) CheckForUpdates(ctx context.Context, installed map[string]state.ToolState, tools map[string]registry.Tool) []UpdateAvailable {
 	var updates []UpdateAvailable
 
 	for name, ts := range installed {
-		tool, ok := tools[name]
-		if !ok {
+		// Determine repo: prefer registry, fall back to state
+		var repo string
+		if tool, ok := tools[name]; ok {
+			repo = tool.Repo
+		} else if ts.Repo != "" {
+			repo = ts.Repo
+		} else {
 			continue
 		}
 
-		release, err := u.github.GetLatestRelease(ctx, tool.Repo)
+		release, err := u.github.GetLatestRelease(ctx, repo)
 		if err != nil {
 			output.Debugf("Failed to check %s: %v", name, err)
 			continue
@@ -61,7 +67,7 @@ func (u *Updater) CheckForUpdates(ctx context.Context, installed map[string]stat
 				Name:           name,
 				CurrentVersion: currentVersion,
 				LatestVersion:  latestVersion,
-				Repo:           tool.Repo,
+				Repo:           repo,
 			})
 		}
 	}

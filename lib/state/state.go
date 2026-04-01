@@ -20,6 +20,7 @@ type ToolState struct {
 	InstalledAt time.Time `json:"installed_at"`
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 	BinaryPath  string    `json:"binary_path"`
+	Repo        string    `json:"repo,omitempty"`
 }
 
 // CurrentStateVersion is the current state file format version.

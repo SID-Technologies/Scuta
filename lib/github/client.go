@@ -70,10 +70,19 @@ func (c *Client) GetLatestRelease(ctx context.Context, repo string) (*Release, e
 }
 
 // GetRelease fetches a specific release by tag for a given repo.
+// It automatically prepends "v" if the tag doesn't already have it.
 func (c *Client) GetRelease(ctx context.Context, repo string, tag string) (*Release, error) {
 	if !strings.HasPrefix(tag, "v") {
 		tag = "v" + tag
 	}
+	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", c.baseURL, repo, tag)
+	output.Debugf("Fetching release %s: %s", tag, url)
+
+	return c.fetchRelease(ctx, url)
+}
+
+// GetReleaseByTag fetches a specific release by its exact tag (no "v" prefix added).
+func (c *Client) GetReleaseByTag(ctx context.Context, repo string, tag string) (*Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", c.baseURL, repo, tag)
 	output.Debugf("Fetching release %s: %s", tag, url)
 

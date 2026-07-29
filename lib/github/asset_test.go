@@ -227,3 +227,22 @@ func TestArchAliases(t *testing.T) {
 		t.Error("expected 'x86_64' in amd64 aliases")
 	}
 }
+
+func TestResolveAsset_EmptyTemplateUsesHeuristic(t *testing.T) {
+	// No template: ResolveAsset must fall back to the heuristic matcher so
+	// Rust-style target triples (arch-first, "aarch64", "apple") still resolve.
+	// Regression for direct-installed tools failing on `scuta update`.
+	assets := []Asset{
+		{Name: "bat-v0.26.1-x86_64-unknown-linux-gnu.tar.gz"},
+		{Name: "bat-v0.26.1-aarch64-apple-darwin.tar.gz"},
+		{Name: "bat_0.26.1_arm64.deb"},
+	}
+
+	asset, err := ResolveAsset(assets, "darwin", "arm64", AssetOptions{})
+	if err != nil {
+		t.Fatalf("expected empty-template resolution to succeed, got %v", err)
+	}
+	if asset.Name != "bat-v0.26.1-aarch64-apple-darwin.tar.gz" {
+		t.Fatalf("expected bat-v0.26.1-aarch64-apple-darwin.tar.gz, got %s", asset.Name)
+	}
+}

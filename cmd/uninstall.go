@@ -102,7 +102,12 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		}
 
 		toolName := toolNames[0]
-		if _, ok := reg.Get(toolName); !ok {
+		ts, installed := st.GetTool(toolName)
+
+		// Only reject unknown tools that are neither in the registry nor
+		// installed. Tools installed directly or via `scuta sync` from an
+		// arbitrary repo won't be in the registry but must still be removable.
+		if _, inRegistry := reg.Get(toolName); !inRegistry && !installed {
 			suggestion := suggest.FormatSuggestion(toolName, reg.Names())
 			if suggestion != "" {
 				return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q — %s", toolName, suggestion))
@@ -110,7 +115,6 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 			return exitcodes.NewError(exitcodes.InvalidArgs, fmt.Sprintf("unknown tool %q. Run 'scuta list' to see available tools", toolName))
 		}
 
-		ts, installed := st.GetTool(toolName)
 		if !installed {
 			output.Warning("%s is not installed", toolName)
 			return nil
@@ -168,7 +172,7 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		toolStart := time.Now()
 		output.Info("Uninstalling %s %s...", toolName, ts.Version)
 
-		if err := inst.Uninstall(toolName); err != nil {
+		if err := uninstallTool(inst, st, toolName); err != nil {
 			output.Error("Failed to uninstall %s: %v", toolName, err)
 			toolResults = append(toolResults, history.ToolResult{
 				Name:     toolName,
@@ -217,4 +221,14 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// uninstallTool removes a tool's binary, preferring the exact path recorded in
+// state (which reflects any custom "bin" name) and falling back to deriving the
+// path from the tool name for older state entries that predate path tracking.
+func uninstallTool(inst *installer.Installer, st *state.State, toolName string) error {
+	if ts, ok := st.GetTool(toolName); ok && ts.BinaryPath != "" {
+		return inst.UninstallBinaryPath(ts.BinaryPath)
+	}
+	return inst.Uninstall(toolName)
 }

@@ -85,7 +85,7 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 	var err error
 
 	if targetVersion != "" {
-		release, err = inst.github.GetRelease(ctx, repo, targetVersion)
+		release, err = inst.github.GetReleaseTolerant(ctx, repo, applyVersionPrefix(targetVersion, ""))
 	} else {
 		release, err = inst.github.GetLatestRelease(ctx, repo)
 	}
@@ -103,8 +103,10 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 		}
 	}
 
-	// Find matching asset
-	asset, err := github.FindAsset(release.Assets, runtime.GOOS, runtime.GOARCH)
+	// Find matching asset (heuristic matcher tries strict GoReleaser patterns
+	// first, then falls back to looser OS/arch matching so tools using Rust-style
+	// target triples like "aarch64-apple-darwin" resolve consistently on update).
+	asset, err := github.FindAssetHeuristic(release.Assets, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return nil, errors.Wrap(err, "finding asset for %s", toolName)
 	}
@@ -234,7 +236,7 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 
 	if targetVersion != "" {
 		tag := applyVersionPrefix(targetVersion, opts.VersionPrefix)
-		release, err = inst.github.GetReleaseByTag(ctx, repo, tag)
+		release, err = inst.github.GetReleaseTolerant(ctx, repo, tag)
 	} else {
 		release, err = inst.github.GetLatestRelease(ctx, repo)
 	}
@@ -530,15 +532,34 @@ func (inst *Installer) Uninstall(toolName string) error {
 	}
 
 	binaryPath := filepath.Join(inst.binDir, binaryName(toolName))
+	return inst.removeManagedBinary(binaryPath, toolName)
+}
 
-	if err := os.Remove(binaryPath); err != nil {
+// UninstallBinaryPath removes a previously installed binary by its recorded
+// path. Use this when the installed binary name differs from the tool name
+// (a custom "bin"), where deriving the path from the tool name would miss the
+// real file. The path must live inside the managed bin directory.
+func (inst *Installer) UninstallBinaryPath(binaryPath string) error {
+	return inst.removeManagedBinary(binaryPath, filepath.Base(binaryPath))
+}
+
+// removeManagedBinary deletes binaryPath after confirming it is inside the
+// installer's managed bin directory, guarding against path traversal or
+// removing files outside Scuta's control. A missing file is not an error.
+func (inst *Installer) removeManagedBinary(binaryPath, label string) error {
+	cleaned := filepath.Clean(binaryPath)
+	if parent := filepath.Dir(cleaned); parent != filepath.Clean(inst.binDir) {
+		return errors.New("refusing to remove %q outside managed bin dir %q", cleaned, inst.binDir)
+	}
+
+	if err := os.Remove(cleaned); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return errors.Wrap(err, "removing binary %s", toolName)
+		return errors.Wrap(err, "removing binary %s", label)
 	}
 
-	output.Debugf("Removed %s from %s", toolName, binaryPath)
+	output.Debugf("Removed %s from %s", label, cleaned)
 	return nil
 }
 
@@ -724,7 +745,8 @@ func findBinary(dir string, toolName string) (string, error) {
 
 	// Walk to find it (one level deep max)
 	var found string
-	var prefixMatch string // fallback: file starting with toolName_
+	var prefixMatch string   // fallback: file starting with toolName_
+	var executables []string // fallback: any executable file (e.g. repo "ripgrep" ships binary "rg")
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -740,25 +762,37 @@ func findBinary(dir string, toolName string) (string, error) {
 		}
 
 		baseName := filepath.Base(path)
-		// Match exact name or name without extension
 		nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-		if baseName == toolName || nameWithoutExt == toolName {
+
+		// An exact filename match is the strongest signal (a bare "rg").
+		if baseName == toolName {
 			found = path
 			return filepath.SkipAll
 		}
 
-		// On Windows, also match with .exe suffix
-		if runtime.GOOS == "windows" {
-			exeName := toolName + ".exe"
-			if strings.EqualFold(baseName, exeName) || strings.EqualFold(nameWithoutExt, toolName) {
-				found = path
-				return filepath.SkipAll
-			}
+		// A match only after stripping an extension is trusted only when the
+		// file still looks executable. This prevents shell-completion or doc
+		// files like "rg.bash"/"rg.1" from being mistaken for the "rg" binary.
+		if nameWithoutExt == toolName && looksLikeBinary(baseName, info.Mode()) {
+			found = path
+			return filepath.SkipAll
+		}
+
+		// On Windows, also match the ".exe" form explicitly.
+		if runtime.GOOS == "windows" && strings.EqualFold(baseName, toolName+".exe") {
+			found = path
+			return filepath.SkipAll
 		}
 
 		// Fallback: match files prefixed with toolName_ (e.g., "pilum_v1.0.0_darwin_arm64")
 		if prefixMatch == "" && strings.HasPrefix(baseName, toolName+"_") && !info.IsDir() {
 			prefixMatch = path
+		}
+
+		// Fallback: track executable files whose name isn't obviously a script/doc.
+		// Handles tools where the binary name differs from the repo name.
+		if looksLikeBinary(baseName, info.Mode()) {
+			executables = append(executables, path)
 		}
 
 		return nil
@@ -777,7 +811,36 @@ func findBinary(dir string, toolName string) (string, error) {
 		return prefixMatch, nil
 	}
 
+	// Last resort: if the archive contains exactly one executable, use it.
+	// Ambiguous (multiple executables) stays an error to avoid installing the wrong file.
+	if len(executables) == 1 {
+		return executables[0], nil
+	}
+
 	return "", errors.New("binary %q not found in extracted archive", toolName)
+}
+
+// looksLikeBinary reports whether a file is plausibly the tool's executable:
+// it must have an execute bit set and must not have an extension associated with
+// scripts, docs, or completions (which are sometimes shipped executable).
+func looksLikeBinary(baseName string, mode os.FileMode) bool {
+	if runtime.GOOS != "windows" && mode&0o111 == 0 {
+		return false
+	}
+
+	ext := strings.ToLower(filepath.Ext(baseName))
+	switch ext {
+	case ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+		".txt", ".md", ".1", ".json", ".yaml", ".yml", ".toml", ".cfg",
+		".so", ".dylib", ".dll":
+		return false
+	}
+
+	if runtime.GOOS == "windows" {
+		return ext == ".exe"
+	}
+
+	return true
 }
 
 // applyVersionPrefix adds the appropriate prefix to a version string for tag lookup.

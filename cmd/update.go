@@ -217,9 +217,17 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		var result *installer.InstallResult
 		var err error
 
+		// A "local"-sourced entry (or one absent from the registry) is a
+		// direct-installed owner/repo tool. Mirror the best-effort checksum
+		// behavior used at install time; registry-blessed ("remote") tools
+		// stay fail-closed.
+		directInstalled := !inRegistry || reg.Source(u.Name) == registry.SourceLocal
+
 		if inRegistry && hasExtendedOpts(tool) {
 			opts := buildInstallOpts(tool)
 			result, err = inst.InstallWithOpts(ctx, u.Name, repo, "", true, skipVerifyFlag, opts)
+		} else if directInstalled {
+			result, err = inst.InstallWithOpts(ctx, u.Name, repo, "", true, skipVerifyFlag, installer.InstallOpts{BestEffort: true})
 		} else {
 			result, err = inst.Install(ctx, u.Name, repo, "", true, skipVerifyFlag)
 		}

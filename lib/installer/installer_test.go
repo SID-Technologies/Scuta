@@ -525,10 +525,16 @@ func TestValidateToolName(t *testing.T) {
 
 func TestFindBinarySingleExecutableFallback(t *testing.T) {
 	// Repo "ripgrep" ships a binary named "rg" alongside non-binary files.
-	// Name/prefix matching fails, so the single-executable fallback should pick "rg".
+	// Name/prefix matching fails, so the single-executable fallback should pick
+	// the binary. Executables are exec-bit files on Unix and .exe on Windows.
 	tmpDir := t.TempDir()
 
-	if err := os.WriteFile(filepath.Join(tmpDir, "rg"), []byte("bin"), 0o755); err != nil {
+	binName := "rg"
+	if runtime.GOOS == "windows" {
+		binName = "rg.exe"
+	}
+
+	if err := os.WriteFile(filepath.Join(tmpDir, binName), []byte("bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("docs"), 0o644); err != nil {
@@ -542,8 +548,8 @@ func TestFindBinarySingleExecutableFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected single-executable fallback to succeed, got %v", err)
 	}
-	if filepath.Base(found) != "rg" {
-		t.Fatalf("expected to find rg, got %s", found)
+	if filepath.Base(found) != binName {
+		t.Fatalf("expected to find %s, got %s", binName, found)
 	}
 }
 

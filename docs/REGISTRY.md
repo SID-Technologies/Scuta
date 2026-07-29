@@ -179,5 +179,63 @@ target triples.
   `.sig` alongside each asset. Supports RSA, ECDSA, and Ed25519.
 - **Policy (opt-in):** enforce allowed/blocked versions and a minimum Scuta
   version from a remote `policy_url`.
+- **Signed metadata (opt-in):** clients can verify the registry itself — see
+  below.
 
 See [SECURITY.md](./SECURITY.md) for the full model.
+
+---
+
+## Signing your registry
+
+Checksums protect tool downloads, but the registry file itself tells clients
+*what* to download. Signing it (and any remote policy or org config) protects
+against a compromised or spoofed host.
+
+**1. Operator: generate a key pair (once):**
+
+```bash
+scuta admin keygen --out scuta-signing
+# scuta-signing.key  — private key, keep offline (0600)
+# scuta-signing.pub  — public key, distribute to clients
+```
+
+**2. Operator: sign the registry on every change:**
+
+```bash
+scuta admin sign registry.yaml --key scuta-signing.key
+# writes registry.yaml.sig — publish it next to registry.yaml
+```
+
+The same applies to a remote policy (`policy.yaml` → `policy.yaml.sig`) and a
+remote org config (`config.yaml` → `config.yaml.sig`). Clients always fetch
+the signature from `<url>.sig`.
+
+**3. Clients: trust the key and (optionally) fail closed:**
+
+```bash
+scuta config set signature_public_key "$(cat scuta-signing.pub)"
+scuta config set require_signed_metadata true
+```
+
+Semantics:
+
+| State | Result |
+|-------|--------|
+| Key set, valid signature | Verified, used |
+| Key set, **invalid** signature | Rejected — always, even without `require_signed_metadata` |
+| Key set, signature missing, require off | Warning, used unverified |
+| Key set, signature missing, require **on** | Rejected (fail closed) |
+| `require_signed_metadata` on, no key configured | Rejected — set the key first |
+
+Trust-root rules:
+
+- `signature_public_key` and `require_signed_metadata` are only honored from
+  **local and system** config — a remotely fetched org config can never supply
+  or replace the trust root.
+- A remote org config may *strengthen* settings (flip require flags on) but
+  never weaken them.
+- Verify any file manually with `scuta admin verify <file> [--pubkey <path>]`.
+
+Signing keys: `scuta admin keygen` produces Ed25519 keys; RSA and ECDSA keys
+in PKCS#8/PKIX PEM form work too (same as asset signature verification).

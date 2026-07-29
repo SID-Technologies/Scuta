@@ -69,8 +69,42 @@ scuta update
 | `scuta doctor` | Health check (PATH, binaries, state, CVEs) |
 | `scuta doctor --skip-cve` | Skip CVE check (for offline environments) |
 | `scuta history` | Show install/update history |
+| `scuta sync` | Reconcile installed tools to a declarative manifest (scuta.lock.yaml) |
+| `scuta sync --dry-run` | Show the reconciliation plan without applying it |
+| `scuta sync --prune` | Also remove installed tools absent from the manifest |
 | `scuta self-update` | Update Scuta itself |
 | `scuta version` | Print version |
+
+### Declarative Sync
+
+Pin your whole toolset in a manifest and converge every machine to it. Commit
+`scuta.lock.yaml` to a repo, and every engineer runs `scuta sync`:
+
+```yaml
+# scuta.lock.yaml
+tools:
+  # Registry tool, pinned version (shorthand form):
+  pilum: "0.7.5"
+  # Arbitrary public repo whose binary name differs from the repo name:
+  ripgrep:
+    version: "14.1.0"
+    repo: "BurntSushi/ripgrep"
+    bin: "rg"
+  # Unpinned — installed only when missing, kept current by `scuta update`:
+  bat: "latest"
+```
+
+```bash
+scuta sync                 # converge to the manifest
+scuta sync --dry-run       # preview the plan
+scuta sync --prune         # also uninstall tools not listed
+scuta sync -f path/to.yaml # use a specific manifest
+```
+
+Sync looks for `scuta.lock.yaml`, `scuta.lock.yml`, `scuta.yaml`, or
+`scuta.yml` in the current directory when `-f` is omitted. Pinned versions are
+fail-closed on checksum verification for registry-blessed tools; direct repos
+fall back to best-effort when a release ships no checksums file.
 
 ### Bundles (Offline / Air-gapped)
 

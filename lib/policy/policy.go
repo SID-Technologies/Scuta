@@ -4,13 +4,12 @@ package policy
 
 import (
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/errors"
+	"github.com/sid-technologies/scuta/lib/fetch"
 
 	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
@@ -75,28 +74,19 @@ func Load(scutaDir string) (*Policy, error) {
 	return Parse(data)
 }
 
-// FetchRemote downloads a policy from the given URL.
-func FetchRemote(url string) (*Policy, error) {
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-		},
-	}
-
-	resp, err := client.Get(url) //nolint:noctx // simple GET with timeout
+// FetchRemote downloads a policy from the given URL. When publicKeyPEM is
+// non-empty the payload is verified against the detached signature at
+// <url>.sig; with requireSigned the fetch fails closed if the signature is
+// missing. A present-but-invalid signature always fails.
+func FetchRemote(url string, publicKeyPEM []byte, requireSigned bool) (*Policy, error) {
+	data, err := fetch.Verified(url, fetch.Options{
+		PublicKeyPEM:     publicKeyPEM,
+		RequireSignature: requireSigned,
+		Timeout:          10 * time.Second,
+		MaxSize:          maxResponseSize,
+	})
 	if err != nil {
 		return nil, errors.Wrap(err, "fetching remote policy")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("remote policy returned %d", resp.StatusCode)
-	}
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
-	if err != nil {
-		return nil, errors.Wrap(err, "reading remote policy response")
 	}
 
 	return Parse(data)

@@ -3,23 +3,17 @@ package installer
 
 import (
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
 	"os"
 	"strings"
 
 	"github.com/sid-technologies/scuta/lib/errors"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/output"
+	"github.com/sid-technologies/scuta/lib/sigverify"
 )
 
 // VerifySignature verifies a detached signature (.sig) against a file using a PEM-encoded public key.
-// Supports RSA, ECDSA, and Ed25519 keys.
+// Supports RSA, ECDSA, and Ed25519 keys (see lib/sigverify for the primitives).
 func VerifySignature(filePath string, signaturePath string, publicKeyPEM []byte) error {
 	// Read the file to verify
 	fileData, err := os.ReadFile(filePath)
@@ -33,39 +27,7 @@ func VerifySignature(filePath string, signaturePath string, publicKeyPEM []byte)
 		return errors.Wrap(err, "reading signature file")
 	}
 
-	// Parse the public key
-	block, _ := pem.Decode(publicKeyPEM)
-	if block == nil {
-		return errors.New("failed to decode PEM public key")
-	}
-
-	pubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return errors.Wrap(err, "parsing public key")
-	}
-
-	// Hash the file content
-	hash := sha256.Sum256(fileData)
-
-	// Verify based on key type
-	switch key := pubKey.(type) {
-	case *rsa.PublicKey:
-		if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, hash[:], sigData); err != nil {
-			return errors.New("RSA signature verification failed")
-		}
-	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(key, hash[:], sigData) {
-			return errors.New("ECDSA signature verification failed")
-		}
-	case ed25519.PublicKey:
-		if !ed25519.Verify(key, fileData, sigData) {
-			return errors.New("Ed25519 signature verification failed")
-		}
-	default:
-		return errors.New("unsupported public key type: %T", pubKey)
-	}
-
-	return nil
+	return sigverify.Verify(fileData, sigData, publicKeyPEM)
 }
 
 // FindSignatureAsset looks for a .sig file matching the asset name in the release.

@@ -5,7 +5,13 @@ on:
 
 jobs:
   gotest:
-    runs-on: ubuntu-latest
+    name: Go tests (${{ matrix.os }})
+    strategy:
+      # Let each OS finish so a single-platform failure is visible as such.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
@@ -16,8 +22,13 @@ jobs:
       - name: Install dependencies
         run: go mod tidy
       - name: Run tests with coverage
+        # bash on all platforms: pwsh splits -coverprofile=coverage.out into
+        # two tokens at the dot, so go tries to resolve a ".out" package.
+        shell: bash
         run: go test -timeout=5m -race -tags=verify_logs -coverprofile=coverage.out ./...
       - name: Upload coverage to Codecov
+        # One upload is enough; coverage is not platform-specific.
+        if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.out

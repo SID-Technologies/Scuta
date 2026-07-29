@@ -3,14 +3,12 @@ package registry
 
 import (
 	stderrors "errors"
-	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/errors"
+	"github.com/sid-technologies/scuta/lib/fetch"
 	"github.com/sid-technologies/scuta/lib/output"
 
 	"gopkg.in/yaml.v3"
@@ -64,6 +62,20 @@ func SetScutaDir(dir string) {
 // Set to "local" to disable remote fetching entirely.
 func SetRegistryURL(url string) {
 	customRemoteURL = url
+}
+
+// registryPublicKey is the PEM trust root for verifying the remote registry.
+var registryPublicKey []byte
+
+// registryRequireSigned makes the remote registry signature mandatory.
+var registryRequireSigned bool
+
+// SetVerification configures detached-signature verification for the remote
+// registry fetch. With a public key set, a signature at <registry_url>.sig is
+// verified whenever present; with require, the fetch fails closed without one.
+func SetVerification(publicKeyPEM []byte, require bool) {
+	registryPublicKey = publicKeyPEM
+	registryRequireSigned = require
 }
 
 // isLocalOnly returns true when the user has opted out of remote registries.
@@ -257,31 +269,15 @@ func (r *Registry) Source(name string) string {
 	return r.Sources[name]
 }
 
-// fetchRemote downloads the registry from the remote URL.
+// fetchRemote downloads the registry from the remote URL, verifying its
+// detached signature when a trust root is configured (see SetVerification).
 func fetchRemote() ([]byte, error) {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-		},
-	}
-
-	resp, err := client.Get(remoteURL()) //nolint:noctx // simple GET with timeout
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("remote registry returned %d", resp.StatusCode)
-	}
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
+	return fetch.Verified(remoteURL(), fetch.Options{
+		PublicKeyPEM:     registryPublicKey,
+		RequireSignature: registryRequireSigned,
+		Timeout:          5 * time.Second,
+		MaxSize:          maxResponseSize,
+	})
 }
 
 // loadLocal reads the local registry from ~/.scuta/local.yaml.

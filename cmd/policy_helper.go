@@ -9,9 +9,11 @@ import (
 // loadPolicy tries to load a policy from a remote URL (if configured),
 // then falls back to the local policy file. Returns nil on any error.
 func loadPolicy(scutaDir string) *policy.Policy {
-	cfg, err := config.Load(scutaDir)
-	if err == nil && cfg.PolicyURL != "" {
-		p, fetchErr := policy.FetchRemote(cfg.PolicyURL)
+	// LoadTrusted resolves the trust root from local + system config only,
+	// so a remotely fetched config can never influence policy verification.
+	cfg := config.LoadTrusted(scutaDir)
+	if cfg.PolicyURL != "" {
+		p, fetchErr := policy.FetchRemote(cfg.PolicyURL, []byte(cfg.SignaturePublicKey), cfg.RequireSignedMetadata)
 		if fetchErr == nil {
 			return p
 		}

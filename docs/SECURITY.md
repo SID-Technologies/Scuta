@@ -14,11 +14,12 @@ Scuta is a CLI tool manager that downloads, verifies, and installs binaries from
 - **Content-Type confusion**: JSON API responses are validated for correct Content-Type before parsing
 - **File permission leaks**: Config, state, and bin directories use restrictive permissions (0600/0700)
 - **Concurrent installs**: File-based locking prevents race conditions during parallel installs
+- **Metadata tampering (opt-in)**: Remote registry, policy, and org config fetches are verified against detached signatures (`<url>.sig`) using a locally configured trust root (`signature_public_key`). With `require_signed_metadata`, unsigned metadata is rejected outright. The trust root is only honored from local/system config — a remote config can never supply its own key.
 
 ### What Scuta does NOT protect against
 
 - **Compromised upstream repos**: If a maintainer's GitHub account is compromised and a legitimate-looking release is published with valid checksums, Scuta will install it. Binary signature verification (see roadmap below) would add a layer here.
-- **Registry poisoning**: A compromised remote registry could redirect tool names to malicious repos. Registry pinning (see roadmap) would mitigate this.
+- **Registry poisoning**: A compromised remote registry could redirect tool names to malicious repos — unless signed metadata is enabled (`signature_public_key` + `require_signed_metadata`), which rejects registries not signed by your key. See [REGISTRY.md](./REGISTRY.md#signing-your-registry).
 - **Supply chain attacks on Scuta itself**: If the Scuta binary itself is compromised, all bets are off. Users should verify the Scuta binary via Homebrew or checksums.
 
 ## Security Roadmap
@@ -31,9 +32,7 @@ Currently Scuta verifies downloads via SHA256 checksums. Adding GPG or cosign si
 
 ### Registry Pinning / Integrity
 
-The remote registry is fetched over HTTPS from GitHub, but there's no hash-pinning mechanism. A hash-pinned registry would allow detection of unexpected changes to the registry manifest.
-
-**Status**: Not implemented. The embedded registry provides a baseline fallback, and `registry_url=local` disables remote fetching entirely for security-conscious users.
+**Status: Implemented** as signed metadata. Operators sign `registry.yaml` (and remote policy/config) with `scuta admin sign`; clients verify against a locally configured public key, failing closed with `require_signed_metadata`. See [REGISTRY.md](./REGISTRY.md#signing-your-registry). For fully offline setups, `registry_url=local` still disables remote fetching entirely.
 
 ### Lock File Stale Timeout
 

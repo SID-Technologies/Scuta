@@ -20,6 +20,12 @@ func TestEnsureDirPermissions(t *testing.T) {
 		t.Fatalf("EnsureDir() failed: %v", err)
 	}
 
+	if runtime.GOOS == "windows" {
+		// POSIX permission bits are not meaningful on Windows (Perm() reports
+		// 0777 for directories); creating the dirs above is the whole test.
+		t.Skip("permission bits not applicable on windows")
+	}
+
 	// Check scuta dir permissions
 	info, err := os.Stat(dir)
 	if err != nil {

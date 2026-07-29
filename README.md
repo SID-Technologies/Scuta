@@ -129,7 +129,7 @@ fall back to best-effort when a release ships no checksums file.
 | `scuta config set <key> <value>` | Set a config value (local config only) |
 | `scuta config reset <key>` | Reset a config value to its default |
 
-Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`, `config_url`, `telemetry`, `require_signature`, `signature_public_key`, `audit_log_destination`
+Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`, `config_url`, `telemetry`, `require_signature`, `require_signed_metadata`, `signature_public_key`, `audit_log_destination`
 
 ### Registry
 
@@ -139,6 +139,14 @@ Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_ba
 | `scuta registry list --all` | Show merged registry with source info |
 | `scuta registry add <name> --repo <owner/repo>` | Add a tool to the local registry |
 | `scuta registry remove <name>` | Remove a tool from the local registry |
+
+### Admin (registry operators)
+
+| Command | Description |
+|---------|-------------|
+| `scuta admin keygen` | Generate an Ed25519 signing key pair |
+| `scuta admin sign <file> --key <key>` | Create a detached signature (`<file>.sig`) |
+| `scuta admin verify <file>` | Verify a file against its detached signature |
 
 ### Shell Completions
 
@@ -181,6 +189,7 @@ Scuta verifies every download:
 
 - **Checksum verification** (default): SHA256 checksums are verified against the release's `checksums.txt`. Fails if checksums are missing (use `--skip-verify` to override).
 - **Signature verification** (opt-in): Enable with `scuta config set require_signature true` and provide a PEM public key via `scuta config set signature_public_key <pem>`. Supports RSA, ECDSA, and Ed25519. When enabled, installs fail if no `.sig` file is found.
+- **Signed metadata** (opt-in): remote registry, policy, and org config fetches are verified against a detached `.sig` file using the same `signature_public_key` trust root. Enable fail-closed mode with `scuta config set require_signed_metadata true`. Operators sign with `scuta admin keygen` / `scuta admin sign` — see [docs/REGISTRY.md](docs/REGISTRY.md#signing-your-registry).
 - **Policy enforcement**: Organizations can enforce version constraints via a remote `policy_url` — allowed/blocked versions, minimum Scuta version.
 
 ## Telemetry

@@ -35,13 +35,21 @@ func Wrap(err error, msg string, attrs ...any) error {
 		return wrapper.Wrap(msg, attrs...)
 	}
 
+	// Format the message with the provided attributes, mirroring New. The
+	// attrs double as slog fields, so only Sprintf when some are present to
+	// avoid mangling a literal '%' in an attr-less message.
+	formatted := msg
+	if len(attrs) > 0 {
+		formatted = fmt.Sprintf(msg, attrs...)
+	}
+
 	var inner structured
 	if As(err, &inner) {
 		attrs = append(attrs, inner.attrs...) // Append inner attributes
 	}
 
 	return structured{
-		err:   pkgerrors.Wrap(err, msg),
+		err:   pkgerrors.Wrap(err, formatted),
 		attrs: attrs,
 	}
 }

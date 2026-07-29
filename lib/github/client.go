@@ -111,7 +111,7 @@ func (c *Client) GetReleaseTolerant(ctx context.Context, repo string, tag string
 	// genuinely-absent version is obvious. Preserve ErrReleaseNotFound so
 	// callers can still detect the "no such release" case via errors.Is.
 	if errors.Is(altErr, ErrReleaseNotFound) {
-		return nil, errors.Wrap(ErrReleaseNotFound, fmt.Sprintf("no release %q or %q in %s", tag, alt, repo))
+		return nil, errors.Wrap(ErrReleaseNotFound, "no release %q or %q in %s", tag, alt, repo)
 	}
 
 	return nil, altErr

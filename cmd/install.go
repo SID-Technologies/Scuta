@@ -702,7 +702,7 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 	// Get the release
 	var release *github.Release
 	if versionFlag != "" {
-		release, err = ghClient.GetRelease(ctx, repo, versionFlag)
+		release, err = ghClient.GetReleaseTolerant(ctx, repo, versionFlag)
 	} else {
 		release, err = ghClient.GetLatestRelease(ctx, repo)
 	}

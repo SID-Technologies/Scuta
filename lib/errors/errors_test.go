@@ -48,12 +48,43 @@ func TestWrap_NilPanics(t *testing.T) {
 
 func TestWrap_WithAttrs(t *testing.T) {
 	inner := stderrors.New("base error")
-	wrapped := Wrap(inner, "context", "attr1")
-	if !strings.Contains(wrapped.Error(), "context") {
+	wrapped := Wrap(inner, "context %s", "attr1")
+	if !strings.Contains(wrapped.Error(), "context attr1") {
 		t.Errorf("expected context in wrap message, got %q", wrapped.Error())
 	}
 	if !strings.Contains(wrapped.Error(), "base error") {
 		t.Errorf("expected base error in wrap message, got %q", wrapped.Error())
+	}
+}
+
+// TestWrap_Formatted guards the fix that made Wrap Sprintf its message with
+// attributes (previously verbs leaked as literal %s/%q into the error text).
+func TestWrap_Formatted(t *testing.T) {
+	inner := stderrors.New("disk full")
+	wrapped := Wrap(inner, "writing file %q (attempt %d)", "/tmp/x", 3)
+	got := wrapped.Error()
+	if !strings.Contains(got, `writing file "/tmp/x" (attempt 3)`) {
+		t.Errorf("expected formatted wrap message, got %q", got)
+	}
+	if strings.Contains(got, "%q") || strings.Contains(got, "%d") {
+		t.Errorf("format verbs leaked into wrap message: %q", got)
+	}
+	if !strings.Contains(got, "disk full") {
+		t.Errorf("expected inner error preserved, got %q", got)
+	}
+}
+
+// TestWrap_LiteralPercentNoAttrs ensures an attr-less message with a literal
+// percent is left untouched (no spurious %!(NOVALUE)).
+func TestWrap_LiteralPercentNoAttrs(t *testing.T) {
+	inner := stderrors.New("base")
+	// The format string is built at runtime (non-constant) so this exercises
+	// the len(attrs)==0 guard rather than vet's static printf check: an
+	// attr-less message must keep a literal percent untouched.
+	pct := "%"
+	wrapped := Wrap(inner, "disk 100"+pct+" full")
+	if !strings.Contains(wrapped.Error(), "disk 100% full") {
+		t.Errorf("expected literal percent preserved, got %q", wrapped.Error())
 	}
 }
 

@@ -4,6 +4,13 @@ SID Developer Toolbox. Install once, get everything.
 
 Scuta manages SID's developer CLI tools — installing, updating, and discovering them from a single command.
 
+> **Bring your own tools.** The bundled registry is intentionally tiny — Scuta is
+> built to point at *your* catalog, whether that's a per-machine local registry
+> or a self-hosted one shared across your org. See
+> [**Run Your Own Registry**](#run-your-own-registry) below, or the full
+> [**docs/REGISTRY.md**](docs/REGISTRY.md) for the local vs. hosted setup and
+> manifest schema.
+
 ## Installation
 
 ### Homebrew (macOS/Linux)
@@ -47,9 +54,7 @@ scuta update
 
 | Tool | Description |
 |------|-------------|
-| `api-gen` | OpenAPI code generator (Go + TypeScript) |
 | `pilum` | Multi-cloud deployment CLI |
-| `mcp-gen` | Generate MCP servers from OpenAPI specs |
 
 ## Commands
 
@@ -71,8 +76,42 @@ scuta update
 | `scuta doctor` | Health check (PATH, binaries, state, CVEs) |
 | `scuta doctor --skip-cve` | Skip CVE check (for offline environments) |
 | `scuta history` | Show install/update history |
+| `scuta sync` | Reconcile installed tools to a declarative manifest (scuta.lock.yaml) |
+| `scuta sync --dry-run` | Show the reconciliation plan without applying it |
+| `scuta sync --prune` | Also remove installed tools absent from the manifest |
 | `scuta self-update` | Update Scuta itself |
 | `scuta version` | Print version |
+
+### Declarative Sync
+
+Pin your whole toolset in a manifest and converge every machine to it. Commit
+`scuta.lock.yaml` to a repo, and every engineer runs `scuta sync`:
+
+```yaml
+# scuta.lock.yaml
+tools:
+  # Registry tool, pinned version (shorthand form):
+  pilum: "0.7.5"
+  # Arbitrary public repo whose binary name differs from the repo name:
+  ripgrep:
+    version: "14.1.0"
+    repo: "BurntSushi/ripgrep"
+    bin: "rg"
+  # Unpinned — installed only when missing, kept current by `scuta update`:
+  bat: "latest"
+```
+
+```bash
+scuta sync                 # converge to the manifest
+scuta sync --dry-run       # preview the plan
+scuta sync --prune         # also uninstall tools not listed
+scuta sync -f path/to.yaml # use a specific manifest
+```
+
+Sync looks for `scuta.lock.yaml`, `scuta.lock.yml`, `scuta.yaml`, or
+`scuta.yml` in the current directory when `-f` is omitted. Pinned versions are
+fail-closed on checksum verification for registry-blessed tools; direct repos
+fall back to best-effort when a release ships no checksums file.
 
 ### Bundles (Offline / Air-gapped)
 
@@ -127,7 +166,7 @@ For environments without internet access, use bundles to transport tools:
 
 ```bash
 # On a connected machine: create a bundle
-scuta bundle create pilum api-gen
+scuta bundle create pilum
 
 # Transfer the .tar.gz bundle to the air-gapped machine, then:
 scuta bundle install ./scuta-bundle-20260319.tar.gz
@@ -159,9 +198,58 @@ scuta config set telemetry true    # enable
 scuta config set telemetry false   # disable
 ```
 
-## Registry Modes
+## Run Your Own Registry
 
-During `scuta init`, you choose a registry mode:
+The bundled registry is intentionally tiny — **it is meant to be replaced with
+yours.** Point Scuta at your own list of tools and it becomes an org-wide version
+manager for whatever CLIs your team ships or depends on (private repos, curated
+public tools, or both).
+
+Scuta merges three layers, later wins on conflicts:
+**embedded** (baked in) → **remote** (`registry_url`, cached 1h) →
+**local** (`~/.scuta/local.yaml`, per-machine).
+
+**Local only — no hosting:**
+
+```bash
+scuta config set registry_url local
+scuta registry add ripgrep --repo BurntSushi/ripgrep --description "fast grep"
+scuta install ripgrep
+```
+
+**Host your own — org-wide:** write a `registry.yaml`, serve it over HTTPS
+(GitHub raw, a private repo, S3, any static host), and point every machine at it:
+
+```bash
+scuta config set registry_url https://raw.githubusercontent.com/acme/tools/main/registry.yaml
+scuta config set github_token <token>   # only for private registries/repos
+scuta install --all
+```
+
+Minimal manifest:
+
+```yaml
+# registry.yaml
+tools:
+  pilum:
+    description: "Multi-cloud deployment CLI"
+    repo: sid-technologies/Pilum
+  ripgrep:
+    description: "Recursively search directories"
+    repo: BurntSushi/ripgrep
+    bin: rg                    # executable name if it differs from the tool name
+```
+
+Inspect the merged result anytime:
+
+```bash
+scuta registry list --all      # shows a SOURCE column: embedded / remote / local
+```
+
+Full schema (asset templates, os/arch maps, version prefixes, dependencies) and
+hosting options are in **[docs/REGISTRY.md](docs/REGISTRY.md)**.
+
+During `scuta init` you can pick a mode up front:
 
 | Mode | Description |
 |------|-------------|

@@ -19,6 +19,11 @@ import (
 // maxResponseSize is the maximum allowed HTTP response body size (10 MB).
 const maxResponseSize = 10 * 1024 * 1024
 
+// ErrReleaseNotFound is returned when a release tag does not exist (HTTP 404).
+// Callers can test for it with errors.Is to distinguish a missing tag from
+// other transport or API failures.
+var ErrReleaseNotFound = errors.New("release not found")
+
 // Client provides access to GitHub Releases for downloading tool binaries.
 type Client struct {
 	token      string
@@ -69,24 +74,57 @@ func (c *Client) GetLatestRelease(ctx context.Context, repo string) (*Release, e
 	return c.fetchRelease(ctx, url)
 }
 
-// GetRelease fetches a specific release by tag for a given repo.
-// It automatically prepends "v" if the tag doesn't already have it.
-func (c *Client) GetRelease(ctx context.Context, repo string, tag string) (*Release, error) {
-	if !strings.HasPrefix(tag, "v") {
-		tag = "v" + tag
-	}
-	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", c.baseURL, repo, tag)
-	output.Debugf("Fetching release %s: %s", tag, url)
-
-	return c.fetchRelease(ctx, url)
-}
-
 // GetReleaseByTag fetches a specific release by its exact tag (no "v" prefix added).
 func (c *Client) GetReleaseByTag(ctx context.Context, repo string, tag string) (*Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", c.baseURL, repo, tag)
 	output.Debugf("Fetching release %s: %s", tag, url)
 
 	return c.fetchRelease(ctx, url)
+}
+
+// GetReleaseTolerant fetches a release by tag, tolerating the "v" prefix
+// convention. It first tries the tag exactly as given, and if that tag is not
+// found it retries with the "v" prefix toggled (added when absent, stripped
+// when present). This handles repos that tag releases without the conventional
+// leading "v" (e.g. ripgrep tags "14.1.0", not "v14.1.0"). Non-404 errors are
+// returned immediately without a retry.
+func (c *Client) GetReleaseTolerant(ctx context.Context, repo string, tag string) (*Release, error) {
+	release, err := c.GetReleaseByTag(ctx, repo, tag)
+	if err == nil {
+		return release, nil
+	}
+	if !errors.Is(err, ErrReleaseNotFound) {
+		return nil, err
+	}
+
+	alt := toggleVPrefix(tag)
+	if alt == tag {
+		return nil, err
+	}
+	output.Debugf("release tag %q not found, retrying with %q", tag, alt)
+
+	release, altErr := c.GetReleaseByTag(ctx, repo, alt)
+	if altErr == nil {
+		return release, nil
+	}
+	// If the alternate form is also missing, report both tags we tried so a
+	// genuinely-absent version is obvious. Preserve ErrReleaseNotFound so
+	// callers can still detect the "no such release" case via errors.Is.
+	if errors.Is(altErr, ErrReleaseNotFound) {
+		return nil, errors.Wrap(ErrReleaseNotFound, "no release %q or %q in %s", tag, alt, repo)
+	}
+
+	return nil, altErr
+}
+
+// toggleVPrefix flips the leading "v" on a version tag: it strips the prefix
+// when present and adds it when absent.
+func toggleVPrefix(tag string) string {
+	if strings.HasPrefix(tag, "v") {
+		return strings.TrimPrefix(tag, "v")
+	}
+
+	return "v" + tag
 }
 
 // fetchRelease performs the HTTP request and parses a Release from the response.
@@ -105,7 +143,7 @@ func (c *Client) fetchRelease(ctx context.Context, url string) (*Release, error)
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, errors.New("release not found at %s", url)
+		return nil, errors.Wrap(ErrReleaseNotFound, "at %s", url)
 	}
 
 	if resp.StatusCode != http.StatusOK {

@@ -31,7 +31,7 @@ type templateData struct {
 // Otherwise, it falls back to the standard GoReleaser pattern matching via FindAsset.
 func ResolveAsset(assets []Asset, goos, goarch string, opts AssetOptions) (*Asset, error) {
 	if opts.Template == "" {
-		return FindAsset(assets, goos, goarch)
+		return FindAssetHeuristic(assets, goos, goarch)
 	}
 
 	resolvedOS := resolveMapping(goos, opts.OSMap)

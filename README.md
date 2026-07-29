@@ -47,9 +47,7 @@ scuta update
 
 | Tool | Description |
 |------|-------------|
-| `api-gen` | OpenAPI code generator (Go + TypeScript) |
 | `pilum` | Multi-cloud deployment CLI |
-| `mcp-gen` | Generate MCP servers from OpenAPI specs |
 
 ## Commands
 
@@ -127,7 +125,7 @@ For environments without internet access, use bundles to transport tools:
 
 ```bash
 # On a connected machine: create a bundle
-scuta bundle create pilum api-gen
+scuta bundle create pilum
 
 # Transfer the .tar.gz bundle to the air-gapped machine, then:
 scuta bundle install ./scuta-bundle-20260319.tar.gz

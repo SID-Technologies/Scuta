@@ -4,6 +4,13 @@ SID Developer Toolbox. Install once, get everything.
 
 Scuta manages SID's developer CLI tools — installing, updating, and discovering them from a single command.
 
+> **Bring your own tools.** The bundled registry is intentionally tiny — Scuta is
+> built to point at *your* catalog, whether that's a per-machine local registry
+> or a self-hosted one shared across your org. See
+> [**Run Your Own Registry**](#run-your-own-registry) below, or the full
+> [**docs/REGISTRY.md**](docs/REGISTRY.md) for the local vs. hosted setup and
+> manifest schema.
+
 ## Installation
 
 ### Homebrew (macOS/Linux)

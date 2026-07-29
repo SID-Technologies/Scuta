@@ -52,7 +52,16 @@ type Config struct {
 	RequireSignature bool `yaml:"require_signature,omitempty"`
 
 	// SignaturePublicKey is a PEM-encoded public key for verifying release signatures.
+	// It is also the trust root for signed remote metadata (registry, policy,
+	// remote config). For that reason it is only ever honored from local or
+	// system config — never from remotely fetched config.
 	SignaturePublicKey string `yaml:"signature_public_key,omitempty"`
+
+	// RequireSignedMetadata makes detached-signature verification mandatory
+	// for remotely fetched metadata: the registry (registry_url), remote
+	// policy (policy_url), and remote org config (config_url). When true,
+	// those fetches fail closed if the .sig is missing or invalid.
+	RequireSignedMetadata bool `yaml:"require_signed_metadata,omitempty"`
 
 	// AuditLogDestination controls where audit log entries are sent.
 	// Supported values: "" (disabled), "stdout", "syslog", or a webhook URL.
@@ -124,7 +133,7 @@ func (c Config) UpdateIntervalDuration() time.Duration {
 
 // ValidKeys returns the list of valid configuration keys.
 func ValidKeys() []string {
-	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url", "config_url", "telemetry", "require_signature", "signature_public_key", "audit_log_destination"}
+	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url", "config_url", "telemetry", "require_signature", "signature_public_key", "require_signed_metadata", "audit_log_destination"}
 }
 
 // DefaultValue returns the default value for a given config key.
@@ -141,7 +150,7 @@ func DefaultValue(key string) string {
 		return defaults.GithubBaseURL
 	case "policy_url":
 		return defaults.PolicyURL
-	case "telemetry", "require_signature":
+	case "telemetry", "require_signature", "require_signed_metadata":
 		return "false"
 	default:
 		return ""
@@ -158,17 +167,22 @@ func (c Config) FieldMap() map[string]string {
 	if c.RequireSignature {
 		requireSigStr = "true"
 	}
+	requireSignedMetaStr := "false"
+	if c.RequireSignedMetadata {
+		requireSignedMetaStr = "true"
+	}
 	return map[string]string{
-		"update_interval":       c.UpdateInterval,
-		"github_token":          c.GithubToken,
-		"registry_url":          c.RegistryURL,
-		"github_base_url":       c.GithubBaseURL,
-		"policy_url":            c.PolicyURL,
-		"config_url":            c.ConfigURL,
-		"telemetry":             telemetryStr,
-		"require_signature":     requireSigStr,
-		"signature_public_key":  c.SignaturePublicKey,
-		"audit_log_destination": c.AuditLogDestination,
+		"update_interval":         c.UpdateInterval,
+		"github_token":            c.GithubToken,
+		"registry_url":            c.RegistryURL,
+		"github_base_url":         c.GithubBaseURL,
+		"policy_url":              c.PolicyURL,
+		"config_url":              c.ConfigURL,
+		"telemetry":               telemetryStr,
+		"require_signature":       requireSigStr,
+		"signature_public_key":    c.SignaturePublicKey,
+		"require_signed_metadata": requireSignedMetaStr,
+		"audit_log_destination":   c.AuditLogDestination,
 	}
 }
 
@@ -194,6 +208,8 @@ func (c *Config) SetField(key, value string) error {
 		c.RequireSignature = value == "true" || value == "1" || value == "yes"
 	case "signature_public_key":
 		c.SignaturePublicKey = value
+	case "require_signed_metadata":
+		c.RequireSignedMetadata = value == "true" || value == "1" || value == "yes"
 	case "audit_log_destination":
 		c.AuditLogDestination = value
 	default:

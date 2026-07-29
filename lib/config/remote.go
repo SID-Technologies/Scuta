@@ -1,13 +1,13 @@
 package config
 
 import (
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/errors"
+	"github.com/sid-technologies/scuta/lib/fetch"
+	"github.com/sid-technologies/scuta/lib/output"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,6 +21,12 @@ const (
 
 // LoadWithMerge loads the effective config by merging multiple sources.
 // Priority (highest to lowest): local user config > remote org config > system-wide config > defaults.
+//
+// Trust boundary: the signature trust root (signature_public_key) and the
+// require_signed_metadata flag are resolved from local + system config BEFORE
+// the remote fetch, and the remote config can never supply or replace the
+// public key (see mergeRemoteConfig). Otherwise a compromised config host
+// could hand out its own key and defeat every downstream verification.
 func LoadWithMerge(scutaDir string) (Config, error) {
 	// Start with defaults
 	cfg := DefaultConfig()
@@ -30,12 +36,15 @@ func LoadWithMerge(scutaDir string) (Config, error) {
 		mergeConfig(&cfg, sysCfg)
 	}
 
-	// Layer 2: remote org config (if config_url is set — fetch or use cache)
-	// We need to peek at the local config first to get the config_url
+	// Layer 2: remote org config (if config_url is set — fetch or use cache).
+	// The fetch is verified against the locally resolved trust root.
 	localCfg, localErr := Load(scutaDir)
 	if localErr == nil && localCfg.ConfigURL != "" {
-		if remoteCfg, err := fetchRemoteConfig(scutaDir, localCfg.ConfigURL); err == nil {
-			mergeConfig(&cfg, remoteCfg)
+		trust := LoadTrusted(scutaDir)
+		if remoteCfg, err := fetchRemoteConfig(scutaDir, localCfg.ConfigURL, trust); err == nil {
+			mergeRemoteConfig(&cfg, remoteCfg)
+		} else {
+			output.Debugf("Remote config not applied: %v", err)
 		}
 	}
 
@@ -47,9 +56,27 @@ func LoadWithMerge(scutaDir string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadTrusted merges defaults, system-wide, and local user config only —
+// never remotely fetched config. Use it to resolve security-critical settings
+// (the signature trust root and fail-closed flags) that must not be
+// influenced by data fetched over the network.
+func LoadTrusted(scutaDir string) Config {
+	cfg := DefaultConfig()
+
+	if sysCfg, err := loadFile(systemConfigPath); err == nil {
+		mergeConfig(&cfg, sysCfg)
+	}
+
+	if localCfg, err := Load(scutaDir); err == nil {
+		mergeConfig(&cfg, localCfg)
+	}
+
+	return cfg
+}
+
 // loadFile loads a Config from a specific YAML file path.
 func loadFile(filePath string) (Config, error) {
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) //nolint:gosec // fixed system path or scuta dir
 	if err != nil {
 		return Config{}, errors.Wrap(err, "reading config file %s", filePath)
 	}
@@ -64,7 +91,10 @@ func loadFile(filePath string) (Config, error) {
 
 // fetchRemoteConfig fetches a remote config from a URL, with local caching.
 // Uses the cached version if it's fresh enough (< remoteConfigCacheTTL).
-func fetchRemoteConfig(scutaDir string, configURL string) (Config, error) {
+// When the trust config carries a public key, the payload is verified against
+// the detached signature at <url>.sig; with require_signed_metadata the fetch
+// fails closed and only a previously verified cache may be used.
+func fetchRemoteConfig(scutaDir string, configURL string, trust Config) (Config, error) {
 	cachePath := filepath.Join(scutaDir, remoteConfigCache)
 
 	// Check if cache is fresh
@@ -76,28 +106,19 @@ func fetchRemoteConfig(scutaDir string, configURL string) (Config, error) {
 		}
 	}
 
-	// Fetch from remote
-	resp, err := http.Get(configURL) //nolint:gosec,noctx // config URL is user-configured
+	data, err := fetch.Verified(configURL, fetch.Options{
+		PublicKeyPEM:     []byte(trust.SignaturePublicKey),
+		RequireSignature: trust.RequireSignedMetadata,
+		MaxSize:          maxRemoteConfigSize,
+	})
 	if err != nil {
-		// Fall back to cached version on failure
+		// Fall back to the cached version (written only after a successful
+		// fetch, so under require_signed_metadata it was verified at write).
 		if cfg, cacheErr := loadFile(cachePath); cacheErr == nil {
+			output.Debugf("Using cached remote config after fetch failure: %v", err)
 			return cfg, nil
 		}
 		return Config{}, errors.Wrap(err, "fetching remote config from %s", configURL)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// Fall back to cached version
-		if cfg, cacheErr := loadFile(cachePath); cacheErr == nil {
-			return cfg, nil
-		}
-		return Config{}, errors.New("remote config returned %d", resp.StatusCode)
-	}
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteConfigSize))
-	if err != nil {
-		return Config{}, errors.Wrap(err, "reading remote config")
 	}
 
 	var cfg Config
@@ -139,10 +160,26 @@ func mergeConfig(dst *Config, src Config) {
 	if src.RequireSignature {
 		dst.RequireSignature = true
 	}
+	if src.RequireSignedMetadata {
+		dst.RequireSignedMetadata = true
+	}
 	if src.SignaturePublicKey != "" {
 		dst.SignaturePublicKey = src.SignaturePublicKey
 	}
 	if src.AuditLogDestination != "" {
 		dst.AuditLogDestination = src.AuditLogDestination
 	}
+}
+
+// mergeRemoteConfig applies a remotely fetched config onto dst. It is
+// mergeConfig minus the trust root: a remote config may strengthen security
+// settings (flip require flags on) but must never supply or replace the
+// signature public key — that would let whoever controls (or intercepts) the
+// config host substitute their own key and defeat verification everywhere.
+func mergeRemoteConfig(dst *Config, src Config) {
+	if src.SignaturePublicKey != "" {
+		output.Warning("Ignoring signature_public_key from remote config — the trust root must be set locally")
+		src.SignaturePublicKey = ""
+	}
+	mergeConfig(dst, src)
 }

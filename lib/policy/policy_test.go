@@ -1,7 +1,11 @@
 package policy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/sid-technologies/scuta/lib/sigverify"
 )
 
 func TestParse(t *testing.T) {
@@ -199,5 +203,77 @@ func TestCheckToolVersion_NoConstraint(t *testing.T) {
 	v := p.CheckToolVersion("pilum", "1.0.0")
 	if v != nil {
 		t.Errorf("expected no violation with empty policy, got: %v", v.Message)
+	}
+}
+
+func TestFetchRemoteSigned(t *testing.T) {
+	payload := []byte("min_scuta_version: \"1.0.0\"\n")
+
+	pub, priv, err := sigverify.GenerateEd25519Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := sigverify.Sign(payload, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/policy.yaml":
+			_, _ = w.Write(payload)
+		case "/policy.yaml.sig":
+			_, _ = w.Write(sig)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	p, err := FetchRemote(server.URL+"/policy.yaml", pub, true)
+	if err != nil {
+		t.Fatalf("verified fetch failed: %v", err)
+	}
+	if p.MinScutaVersion != "1.0.0" {
+		t.Errorf("MinScutaVersion = %q, want %q", p.MinScutaVersion, "1.0.0")
+	}
+
+	// Wrong key must fail even when the signature is present and valid for
+	// another key.
+	otherPub, _, err := sigverify.GenerateEd25519Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FetchRemote(server.URL+"/policy.yaml", otherPub, true); err == nil {
+		t.Fatal("expected verification failure with wrong key")
+	}
+}
+
+func TestFetchRemoteUnsigned(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/policy.yaml" {
+			_, _ = w.Write([]byte("min_scuta_version: \"2.0.0\"\n"))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	// No key: plain fetch still works.
+	p, err := FetchRemote(server.URL+"/policy.yaml", nil, false)
+	if err != nil {
+		t.Fatalf("plain fetch failed: %v", err)
+	}
+	if p.MinScutaVersion != "2.0.0" {
+		t.Errorf("MinScutaVersion = %q, want %q", p.MinScutaVersion, "2.0.0")
+	}
+
+	// Required signature but none served: fail closed.
+	pub, _, err := sigverify.GenerateEd25519Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FetchRemote(server.URL+"/policy.yaml", pub, true); err == nil {
+		t.Fatal("expected failure when required signature is missing")
 	}
 }

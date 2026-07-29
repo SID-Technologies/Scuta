@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/sid-technologies/scuta/lib/sigverify"
 )
 
 func TestMergeConfigPriority(t *testing.T) {
@@ -100,7 +102,7 @@ func TestFetchRemoteConfig(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	cfg, err := fetchRemoteConfig(tmpDir, server.URL)
+	cfg, err := fetchRemoteConfig(tmpDir, server.URL, Config{})
 	if err != nil {
 		t.Fatalf("fetchRemoteConfig failed: %v", err)
 	}
@@ -130,13 +132,13 @@ func TestFetchRemoteConfigUsesCache(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// First fetch
-	_, err := fetchRemoteConfig(tmpDir, server.URL)
+	_, err := fetchRemoteConfig(tmpDir, server.URL, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Second fetch should hit cache
-	cfg, err := fetchRemoteConfig(tmpDir, server.URL)
+	cfg, err := fetchRemoteConfig(tmpDir, server.URL, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,12 +235,153 @@ func TestFetchRemoteConfigFallbackToCache(t *testing.T) {
 	}
 
 	// The fetch will fail because the URL is unreachable, but should fall back to cache
-	cfg, err := fetchRemoteConfig(tmpDir, "https://unreachable.invalid/config.yaml")
+	cfg, err := fetchRemoteConfig(tmpDir, "https://unreachable.invalid/config.yaml", Config{})
 	if err != nil {
 		t.Fatal(err) // should succeed via cache fallback
 	}
 
 	if cfg.UpdateInterval != "72h" {
 		t.Errorf("expected 72h from fallback cache, got %q", cfg.UpdateInterval)
+	}
+}
+
+// signingTestServer serves a config payload at / and, when sign is true, a
+// detached signature at /.sig. It returns the server and the public key PEM.
+func signingTestServer(t *testing.T, payload []byte, sign bool, tamper bool) (*httptest.Server, []byte) {
+	t.Helper()
+
+	pub, priv, err := sigverify.GenerateEd25519Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sig, err := sigverify.Sign(payload, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tamper {
+		sig[0] ^= 0xff
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/config.yaml":
+			_, _ = w.Write(payload)
+		case r.URL.Path == "/config.yaml.sig" && sign:
+			_, _ = w.Write(sig)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	return server, pub
+}
+
+func TestFetchRemoteConfigVerifiedSignature(t *testing.T) {
+	payload := []byte("update_interval: 48h\n")
+	server, pub := signingTestServer(t, payload, true, false)
+	defer server.Close()
+
+	trust := Config{
+		SignaturePublicKey:    string(pub),
+		RequireSignedMetadata: true,
+	}
+
+	cfg, err := fetchRemoteConfig(t.TempDir(), server.URL+"/config.yaml", trust)
+	if err != nil {
+		t.Fatalf("verified fetch failed: %v", err)
+	}
+	if cfg.UpdateInterval != "48h" {
+		t.Errorf("expected 48h, got %q", cfg.UpdateInterval)
+	}
+}
+
+func TestFetchRemoteConfigBadSignatureFails(t *testing.T) {
+	payload := []byte("update_interval: 48h\n")
+	server, pub := signingTestServer(t, payload, true, true)
+	defer server.Close()
+
+	// Bad signature must fail even when signatures are not required.
+	trust := Config{SignaturePublicKey: string(pub)}
+
+	tmpDir := t.TempDir()
+	if _, err := fetchRemoteConfig(tmpDir, server.URL+"/config.yaml", trust); err == nil {
+		t.Fatal("expected error for tampered signature")
+	}
+
+	// A failed verification must not leave a cache file behind.
+	if _, err := os.Stat(filepath.Join(tmpDir, remoteConfigCache)); !os.IsNotExist(err) {
+		t.Error("cache file should not exist after failed verification")
+	}
+}
+
+func TestFetchRemoteConfigMissingSignatureRequiredFails(t *testing.T) {
+	payload := []byte("update_interval: 48h\n")
+	server, pub := signingTestServer(t, payload, false, false)
+	defer server.Close()
+
+	trust := Config{
+		SignaturePublicKey:    string(pub),
+		RequireSignedMetadata: true,
+	}
+
+	if _, err := fetchRemoteConfig(t.TempDir(), server.URL+"/config.yaml", trust); err == nil {
+		t.Fatal("expected error for missing required signature")
+	}
+}
+
+func TestMergeRemoteConfigStripsPublicKey(t *testing.T) {
+	dst := Config{SignaturePublicKey: "local-trust-root"}
+	src := Config{
+		SignaturePublicKey: "attacker-supplied-key",
+		UpdateInterval:     "48h",
+	}
+
+	mergeRemoteConfig(&dst, src)
+
+	if dst.SignaturePublicKey != "local-trust-root" {
+		t.Errorf("remote config must not replace the trust root: got %q", dst.SignaturePublicKey)
+	}
+	if dst.UpdateInterval != "48h" {
+		t.Errorf("other remote fields should still merge: got %q", dst.UpdateInterval)
+	}
+}
+
+func TestMergeConfigRequireSignedMetadataStrengthenOnly(t *testing.T) {
+	dst := Config{RequireSignedMetadata: true}
+	mergeConfig(&dst, Config{RequireSignedMetadata: false})
+	if !dst.RequireSignedMetadata {
+		t.Error("merge must not weaken require_signed_metadata")
+	}
+
+	dst = Config{}
+	mergeConfig(&dst, Config{RequireSignedMetadata: true})
+	if !dst.RequireSignedMetadata {
+		t.Error("merge should allow strengthening require_signed_metadata")
+	}
+}
+
+func TestLoadTrustedIgnoresRemote(t *testing.T) {
+	// Remote config server that tries to supply a trust root.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("signature_public_key: attacker-key\nupdate_interval: 48h\n"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	local := Config{
+		Version:   1,
+		ConfigURL: server.URL,
+	}
+	if err := Save(tmpDir, local); err != nil {
+		t.Fatal(err)
+	}
+
+	trusted := LoadTrusted(tmpDir)
+	if trusted.SignaturePublicKey != "" {
+		t.Errorf("LoadTrusted must never pick up remote values: got %q", trusted.SignaturePublicKey)
+	}
+	if trusted.ConfigURL != server.URL {
+		t.Errorf("LoadTrusted should still read local config: got %q", trusted.ConfigURL)
 	}
 }

@@ -23,6 +23,13 @@ func main() {
 		if err == nil && cfg.RegistryURL != "" {
 			registry.SetRegistryURL(cfg.RegistryURL)
 		}
+
+		// Trust root and fail-closed flag come from local + system config
+		// only — never from remotely fetched config.
+		trust := config.LoadTrusted(dir)
+		if trust.SignaturePublicKey != "" || trust.RequireSignedMetadata {
+			registry.SetVerification([]byte(trust.SignaturePublicKey), trust.RequireSignedMetadata)
+		}
 	}
 
 	cmd.Execute()

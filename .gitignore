@@ -29,4 +29,7 @@ coverage/
 
 # Pilum cache/history
 .pilum/
-docs/
+
+# Generated CLI docs (make gen-markdown / gen-man)
+docs/cli/
+man/

@@ -191,9 +191,58 @@ scuta config set telemetry true    # enable
 scuta config set telemetry false   # disable
 ```
 
-## Registry Modes
+## Run Your Own Registry
 
-During `scuta init`, you choose a registry mode:
+The bundled registry is intentionally tiny — **it is meant to be replaced with
+yours.** Point Scuta at your own list of tools and it becomes an org-wide version
+manager for whatever CLIs your team ships or depends on (private repos, curated
+public tools, or both).
+
+Scuta merges three layers, later wins on conflicts:
+**embedded** (baked in) → **remote** (`registry_url`, cached 1h) →
+**local** (`~/.scuta/local.yaml`, per-machine).
+
+**Local only — no hosting:**
+
+```bash
+scuta config set registry_url local
+scuta registry add ripgrep --repo BurntSushi/ripgrep --description "fast grep"
+scuta install ripgrep
+```
+
+**Host your own — org-wide:** write a `registry.yaml`, serve it over HTTPS
+(GitHub raw, a private repo, S3, any static host), and point every machine at it:
+
+```bash
+scuta config set registry_url https://raw.githubusercontent.com/acme/tools/main/registry.yaml
+scuta config set github_token <token>   # only for private registries/repos
+scuta install --all
+```
+
+Minimal manifest:
+
+```yaml
+# registry.yaml
+tools:
+  pilum:
+    description: "Multi-cloud deployment CLI"
+    repo: sid-technologies/Pilum
+  ripgrep:
+    description: "Recursively search directories"
+    repo: BurntSushi/ripgrep
+    bin: rg                    # executable name if it differs from the tool name
+```
+
+Inspect the merged result anytime:
+
+```bash
+scuta registry list --all      # shows a SOURCE column: embedded / remote / local
+```
+
+Full schema (asset templates, os/arch maps, version prefixes, dependencies) and
+hosting options are in **[docs/REGISTRY.md](docs/REGISTRY.md)**.
+
+During `scuta init` you can pick a mode up front:
 
 | Mode | Description |
 |------|-------------|

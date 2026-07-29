@@ -22,6 +22,9 @@ jobs:
       - name: Install dependencies
         run: go mod tidy
       - name: Run tests with coverage
+        # bash on all platforms: pwsh splits -coverprofile=coverage.out into
+        # two tokens at the dot, so go tries to resolve a ".out" package.
+        shell: bash
         run: go test -timeout=5m -race -tags=verify_logs -coverprofile=coverage.out ./...
       - name: Upload coverage to Codecov
         # One upload is enough; coverage is not platform-specific.

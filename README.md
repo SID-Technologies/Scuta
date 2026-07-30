@@ -80,6 +80,7 @@ scuta update
 | `scuta sync` | Reconcile installed tools to a declarative manifest (scuta.lock.yaml) |
 | `scuta sync --dry-run` | Show the reconciliation plan without applying it |
 | `scuta sync --prune` | Also remove installed tools absent from the manifest |
+| `scuta sync --check` | Exit 8 if the machine has drifted from the manifest (CI gate) |
 | `scuta self-update` | Update Scuta itself |
 | `scuta version` | Print version |
 
@@ -107,6 +108,7 @@ scuta sync                 # converge to the manifest
 scuta sync --dry-run       # preview the plan
 scuta sync --prune         # also uninstall tools not listed
 scuta sync -f path/to.yaml # use a specific manifest
+scuta sync --check         # CI gate: exit 8 on drift, change nothing
 ```
 
 Sync looks for `scuta.lock.yaml`, `scuta.lock.yml`, `scuta.yaml`, or

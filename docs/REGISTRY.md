@@ -218,6 +218,19 @@ scuta config set -- signature_public_key "$(cat scuta-signing.pub)"
 scuta config set require_signed_metadata true
 ```
 
+Or do all of it in one shot on a fresh machine — `init --from` installs the
+key as the trust root *before* the first fetch, enables
+`require_signed_metadata`, verifies the org config, and saves its URL as
+`config_url`:
+
+```bash
+scuta init --from https://example.com/scuta/config.yaml --key scuta-signing.pub
+```
+
+The [registry-starter](https://github.com/sid-technologies/registry-starter)
+template repo has a ready-made layout (registry + org config + policy +
+signing CI) for hosting all of this.
+
 Semantics:
 
 | State | Result |

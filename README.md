@@ -81,6 +81,8 @@ scuta update
 | `scuta sync --dry-run` | Show the reconciliation plan without applying it |
 | `scuta sync --prune` | Also remove installed tools absent from the manifest |
 | `scuta sync --check` | Exit 8 if the machine has drifted from the manifest (CI gate) |
+| `scuta cache info` | Show download cache location, entry count, and size |
+| `scuta cache clear` | Remove all cached downloads |
 | `scuta self-update` | Update Scuta itself |
 | `scuta version` | Print version |
 
@@ -132,7 +134,7 @@ fall back to best-effort when a release ships no checksums file.
 | `scuta config set <key> <value>` | Set a config value (local config only) |
 | `scuta config reset <key>` | Reset a config value to its default |
 
-Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`, `config_url`, `telemetry`, `require_signature`, `require_signed_metadata`, `signature_public_key`, `audit_log_destination`
+Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`, `config_url`, `telemetry`, `require_signature`, `require_signed_metadata`, `signature_public_key`, `audit_log_destination`, `disable_download_cache`
 
 ### Registry
 
@@ -194,6 +196,7 @@ Scuta verifies every download:
 - **Signature verification** (opt-in): Enable with `scuta config set require_signature true` and provide a PEM public key via `scuta config set signature_public_key <pem>`. Supports RSA, ECDSA, and Ed25519. When enabled, installs fail if no `.sig` file is found.
 - **Signed metadata** (opt-in): remote registry, policy, and org config fetches are verified against a detached `.sig` file using the same `signature_public_key` trust root. Enable fail-closed mode with `scuta config set require_signed_metadata true`. Operators sign with `scuta admin keygen` / `scuta admin sign` — see [docs/REGISTRY.md](docs/REGISTRY.md#signing-your-registry).
 - **Policy enforcement**: Organizations can enforce version constraints via a remote `policy_url` — allowed/blocked versions, minimum Scuta version.
+- **Download cache**: verified assets are cached content-addressed by SHA-256 under `~/.scuta/cache`, so repeat installs skip the network without weakening verification — only checksum-verified assets are ever cached, and entries are re-hashed on every hit. Inspect with `scuta cache info`; disable with `scuta config set disable_download_cache true`.
 
 ## Telemetry
 

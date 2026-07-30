@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/sid-technologies/scuta/lib/cache"
 	"github.com/sid-technologies/scuta/lib/errors"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/output"
@@ -24,6 +25,7 @@ type Installer struct {
 	binDir           string
 	requireSignature bool
 	signaturePubKey  []byte
+	cache            *cache.Cache
 }
 
 // InstallResult holds the outcome of an install operation.
@@ -49,6 +51,7 @@ func New(ghClient *github.Client, scutaDir string) *Installer {
 		github:   ghClient,
 		scutaDir: scutaDir,
 		binDir:   filepath.Join(scutaDir, "bin"),
+		cache:    cache.New(scutaDir),
 	}
 }
 
@@ -59,6 +62,7 @@ func NewWithBinDir(ghClient *github.Client, scutaDir string, binDir string) *Ins
 		github:   ghClient,
 		scutaDir: scutaDir,
 		binDir:   binDir,
+		cache:    cache.New(scutaDir),
 	}
 }
 
@@ -67,6 +71,16 @@ func NewWithBinDir(ghClient *github.Client, scutaDir string, binDir string) *Ins
 func (inst *Installer) SetSignatureVerification(requireSig bool, pubKey []byte) {
 	inst.requireSignature = requireSig
 	inst.signaturePubKey = pubKey
+}
+
+// SetDownloadCache enables or disables the content-addressed download cache.
+// It is enabled by default; disable via the disable_download_cache config key.
+func (inst *Installer) SetDownloadCache(enabled bool) {
+	if enabled {
+		inst.cache = cache.New(inst.scutaDir)
+		return
+	}
+	inst.cache = nil
 }
 
 // Install downloads and installs a tool binary from GitHub Releases.
@@ -120,39 +134,10 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Fetch + verify (fail-closed: any checksum failure is an error unless --skip-verify)
 	archivePath := filepath.Join(tmpDir, asset.Name)
-	if err := inst.github.DownloadAsset(ctx, asset.BrowserDownloadURL, archivePath); err != nil {
-		return nil, errors.Wrap(err, "downloading %s", asset.Name)
-	}
-
-	// Checksum verification (fail-closed: any failure is an error unless --skip-verify)
-	if skipVerify {
-		output.Warning("Skipping checksum verification (--skip-verify)")
-	} else {
-		checksums, csErr := inst.github.DownloadChecksums(ctx, release)
-		if csErr != nil {
-			return nil, errors.Wrap(csErr, "checksum verification failed for %s: could not download checksums", toolName)
-		}
-		if checksums == nil {
-			return nil, errors.New("checksum verification failed for %s: no checksums file in release (use --skip-verify to override)", toolName)
-		}
-		expectedHash, ok := checksums[asset.Name]
-		if !ok {
-			return nil, errors.New("checksum verification failed for %s: no entry for %s in checksums file (use --skip-verify to override)", toolName, asset.Name)
-		}
-		if err := VerifyChecksum(archivePath, expectedHash); err != nil {
-			return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
-		}
-		output.Debugf("Checksum verified for %s", asset.Name)
-	}
-
-	// Signature verification (when public key is configured)
-	if len(inst.signaturePubKey) > 0 {
-		if err := DownloadAndVerifySignature(ctx, inst.github, release, asset.Name, archivePath, inst.signaturePubKey, inst.requireSignature); err != nil {
-			return nil, errors.Wrap(err, "signature verification failed for %s", toolName)
-		}
-	} else if inst.requireSignature {
-		return nil, errors.New("signature required but no public key configured (set signature_public_key in config)")
+	if err := inst.fetchVerifiedAsset(ctx, release, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, false); err != nil {
+		return nil, err
 	}
 
 	// Check for cancellation before extraction
@@ -284,49 +269,10 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Fetch + verify (BestEffort softens missing checksums to warnings)
 	archivePath := filepath.Join(tmpDir, asset.Name)
-	if err := inst.github.DownloadAsset(ctx, asset.BrowserDownloadURL, archivePath); err != nil {
-		return nil, errors.Wrap(err, "downloading %s", asset.Name)
-	}
-
-	// Checksum verification
-	if skipVerify {
-		output.Warning("Skipping checksum verification (--skip-verify)")
-	} else {
-		checksums, csErr := inst.github.DownloadChecksums(ctx, release)
-		if csErr != nil {
-			if !opts.BestEffort {
-				return nil, errors.Wrap(csErr, "checksum verification failed for %s: could not download checksums", toolName)
-			}
-			output.Warning("Could not download checksums for %s: %v", toolName, csErr)
-		} else if checksums == nil {
-			if !opts.BestEffort {
-				return nil, errors.New("checksum verification failed for %s: no checksums file in release (use --skip-verify to override)", toolName)
-			}
-			output.Warning("No checksums file in release for %s — skipping verification", toolName)
-		} else {
-			expectedHash, ok := checksums[asset.Name]
-			if !ok {
-				if !opts.BestEffort {
-					return nil, errors.New("checksum verification failed for %s: no entry for %s in checksums file (use --skip-verify to override)", toolName, asset.Name)
-				}
-				output.Warning("No checksum entry for %s — skipping verification", asset.Name)
-			} else {
-				if err := VerifyChecksum(archivePath, expectedHash); err != nil {
-					return nil, errors.Wrap(err, "checksum verification failed for %s", toolName)
-				}
-				output.Debugf("Checksum verified for %s", asset.Name)
-			}
-		}
-	}
-
-	// Signature verification
-	if len(inst.signaturePubKey) > 0 {
-		if err := DownloadAndVerifySignature(ctx, inst.github, release, asset.Name, archivePath, inst.signaturePubKey, inst.requireSignature); err != nil {
-			return nil, errors.Wrap(err, "signature verification failed for %s", toolName)
-		}
-	} else if inst.requireSignature {
-		return nil, errors.New("signature required but no public key configured (set signature_public_key in config)")
+	if err := inst.fetchVerifiedAsset(ctx, release, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, opts.BestEffort); err != nil {
+		return nil, err
 	}
 
 	if ctx.Err() != nil {
@@ -394,6 +340,101 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 		Version:    version,
 		BinaryPath: binaryPath,
 	}, nil
+}
+
+// fetchVerifiedAsset obtains a release asset into destPath and applies
+// checksum and signature verification. When a trusted checksum is known and
+// the download cache is enabled, a verified cached copy is reused instead of
+// re-downloading; fresh verified downloads are stored back into the cache.
+//
+// bestEffort softens missing-checksum conditions (no checksums file, no
+// entry for this asset) to warnings. A checksum that is present but fails
+// to match is always fatal, and unverified assets are never cached.
+func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.Release, assetName, downloadURL, toolName, destPath string, skipVerify, bestEffort bool) error {
+	expectedHash, err := inst.resolveExpectedHash(ctx, release, assetName, toolName, skipVerify, bestEffort)
+	if err != nil {
+		return err
+	}
+
+	fromCache := false
+	if expectedHash != "" && inst.cache != nil {
+		hit, cacheErr := inst.cache.Get(expectedHash, destPath)
+		if cacheErr != nil {
+			output.Debugf("Download cache lookup failed for %s: %v", assetName, cacheErr)
+		} else if hit {
+			output.Debugf("Using cached download for %s", assetName)
+			fromCache = true
+		}
+	}
+
+	if !fromCache {
+		if err := inst.github.DownloadAsset(ctx, downloadURL, destPath); err != nil {
+			return errors.Wrap(err, "downloading %s", assetName)
+		}
+	}
+
+	if expectedHash != "" {
+		if err := VerifyChecksum(destPath, expectedHash); err != nil {
+			return errors.Wrap(err, "checksum verification failed for %s", toolName)
+		}
+		output.Debugf("Checksum verified for %s", assetName)
+
+		// Cache writes are best-effort: a full disk must not fail the install.
+		if !fromCache && inst.cache != nil {
+			if err := inst.cache.Put(expectedHash, destPath); err != nil {
+				output.Debugf("Could not cache download for %s: %v", assetName, err)
+			}
+		}
+	}
+
+	// Signature verification (when public key is configured)
+	if len(inst.signaturePubKey) > 0 {
+		if err := DownloadAndVerifySignature(ctx, inst.github, release, assetName, destPath, inst.signaturePubKey, inst.requireSignature); err != nil {
+			return errors.Wrap(err, "signature verification failed for %s", toolName)
+		}
+	} else if inst.requireSignature {
+		return errors.New("signature required but no public key configured (set signature_public_key in config)")
+	}
+
+	return nil
+}
+
+// resolveExpectedHash fetches the release checksums file and returns the
+// expected SHA-256 for assetName. It returns "" (verify nothing) when
+// verification is skipped or when bestEffort downgrades a missing checksum
+// to a warning; otherwise missing checksums fail closed.
+func (inst *Installer) resolveExpectedHash(ctx context.Context, release *github.Release, assetName, toolName string, skipVerify, bestEffort bool) (string, error) {
+	if skipVerify {
+		output.Warning("Skipping checksum verification (--skip-verify)")
+		return "", nil
+	}
+
+	checksums, csErr := inst.github.DownloadChecksums(ctx, release)
+	switch {
+	case csErr != nil:
+		if !bestEffort {
+			return "", errors.Wrap(csErr, "checksum verification failed for %s: could not download checksums", toolName)
+		}
+		output.Warning("Could not download checksums for %s: %v", toolName, csErr)
+		return "", nil
+	case checksums == nil:
+		if !bestEffort {
+			return "", errors.New("checksum verification failed for %s: no checksums file in release (use --skip-verify to override)", toolName)
+		}
+		output.Warning("No checksums file in release for %s — skipping verification", toolName)
+		return "", nil
+	}
+
+	expectedHash, ok := checksums[assetName]
+	if !ok {
+		if !bestEffort {
+			return "", errors.New("checksum verification failed for %s: no entry for %s in checksums file (use --skip-verify to override)", toolName, assetName)
+		}
+		output.Warning("No checksum entry for %s — skipping verification", assetName)
+		return "", nil
+	}
+
+	return expectedHash, nil
 }
 
 // installRawBinary handles installing a raw binary (not an archive).

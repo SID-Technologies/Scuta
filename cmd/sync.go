@@ -151,6 +151,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	token := auth.ResolveTokenWithConfig(scutaDir)
 	ghClient := newGitHubClient(token, scutaDir)
 	inst := installer.New(ghClient, scutaDir)
+	applyDownloadCacheConfig(inst, scutaDir)
 	pol := loadPolicy(scutaDir)
 
 	start := time.Now()

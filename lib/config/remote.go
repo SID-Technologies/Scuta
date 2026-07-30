@@ -169,6 +169,9 @@ func mergeConfig(dst *Config, src Config) {
 	if src.AuditLogDestination != "" {
 		dst.AuditLogDestination = src.AuditLogDestination
 	}
+	if src.DisableDownloadCache {
+		dst.DisableDownloadCache = true
+	}
 }
 
 // mergeRemoteConfig applies a remotely fetched config onto dst. It is

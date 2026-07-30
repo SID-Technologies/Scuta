@@ -131,6 +131,7 @@ func runBundleInstall(cmd *cobra.Command, args []string) error {
 
 	ghClient := newGitHubClient("", scutaDir)
 	inst := installer.New(ghClient, scutaDir)
+	applyDownloadCacheConfig(inst, scutaDir)
 	st, err := state.Load(scutaDir)
 	if err != nil {
 		return err

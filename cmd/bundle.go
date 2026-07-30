@@ -334,10 +334,15 @@ func runBundleInstall(cmd *cobra.Command, args []string) error {
 	// Bundle signature check. The trust root only ever comes from local or
 	// system config (LoadTrusted). An invalid signature is always fatal; a
 	// missing one is fatal only with require_signature enabled.
+	cfg := config.LoadTrusted(scutaDir)
 	if skipVerify {
+		// --skip-verify never overrides the require_signature policy: the
+		// config is authoritative, the flag is a convenience.
+		if cfg.RequireSignature {
+			return exitcodes.NewError(exitcodes.Config, "--skip-verify cannot be used while require_signature is enabled")
+		}
 		output.Warning("Skipping bundle verification (--skip-verify)")
 	} else {
-		cfg := config.LoadTrusted(scutaDir)
 		signed, sigErr := installer.VerifyBundleSignature(tmpDir, []byte(cfg.SignaturePublicKey), cfg.RequireSignature)
 		if sigErr != nil {
 			return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("bundle verification failed: %v", sigErr))

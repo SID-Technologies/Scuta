@@ -76,6 +76,7 @@ scuta update
 | `scuta doctor` | Health check (PATH, binaries, state, CVEs) |
 | `scuta doctor --skip-cve` | Skip CVE check (for offline environments) |
 | `scuta history` | Show install/update history |
+| `scuta rollback <tool>` | Reinstall the previous version from history |
 | `scuta sync` | Reconcile installed tools to a declarative manifest (scuta.lock.yaml) |
 | `scuta sync --dry-run` | Show the reconciliation plan without applying it |
 | `scuta sync --prune` | Also remove installed tools absent from the manifest |

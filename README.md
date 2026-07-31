@@ -123,6 +123,10 @@ fall back to best-effort when a release ships no checksums file.
 | Command | Description |
 |---------|-------------|
 | `scuta bundle create [tool...]` | Create an offline bundle with tool archives |
+| `scuta bundle create --from-manifest <file>` | Bundle exactly what a `scuta.lock.yaml` pins |
+| `scuta bundle create --platforms <os/arch,...>` | Include builds for multiple target platforms |
+| `scuta bundle create --sign <key.pem>` | Embed a signed manifest in the bundle |
+| `scuta bundle verify <bundle> [--key <pub.pem>]` | Verify bundle signature and asset checksums |
 | `scuta bundle install <bundle>` | Install tools from an offline bundle |
 
 ### Configuration
@@ -181,7 +185,11 @@ For environments without internet access, use bundles to transport tools:
 # On a connected machine: create a bundle
 scuta bundle create pilum
 
+# Bundle exactly what your manifest pins, for multiple platforms, signed:
+scuta bundle create --from-manifest scuta.lock.yaml    --platforms darwin/arm64,linux/amd64 --sign scuta-signing.key
+
 # Transfer the .tar.gz bundle to the air-gapped machine, then:
+scuta bundle verify ./scuta-bundle-20260319.tar.gz --key scuta-signing.pub
 scuta bundle install ./scuta-bundle-20260319.tar.gz
 
 # Or install a single tool from a local archive:
@@ -195,6 +203,7 @@ Scuta verifies every download:
 - **Checksum verification** (default): SHA256 checksums are verified against the release's `checksums.txt`. Fails if checksums are missing (use `--skip-verify` to override).
 - **Signature verification** (opt-in): Enable with `scuta config set require_signature true` and provide a PEM public key via `scuta config set signature_public_key <pem>`. Supports RSA, ECDSA, and Ed25519. When enabled, installs fail if no `.sig` file is found.
 - **Signed metadata** (opt-in): remote registry, policy, and org config fetches are verified against a detached `.sig` file using the same `signature_public_key` trust root. Enable fail-closed mode with `scuta config set require_signed_metadata true`. Operators sign with `scuta admin keygen` / `scuta admin sign` — see [docs/REGISTRY.md](docs/REGISTRY.md#signing-your-registry).
+- **Signed bundles**: `scuta bundle create --sign <key>` signs the bundle manifest (which pins every asset by SHA-256, across all platforms in the bundle). `bundle verify` and `bundle install` check the signature against the `signature_public_key` trust root; an invalid signature is always fatal, and `require_signature true` makes unsigned bundles fail closed (and blocks `--skip-verify` — the policy is authoritative). Asset checksums are verified on every install either way.
 - **Policy enforcement**: Organizations can enforce version constraints via a remote `policy_url` — allowed/blocked versions, minimum Scuta version.
 - **Download cache**: verified assets are cached content-addressed by SHA-256 under `~/.scuta/cache`, so repeat installs skip the network without weakening verification — only checksum-verified assets are ever cached, and entries are re-hashed on every hit. Inspect with `scuta cache info`; disable with `scuta config set disable_download_cache true`.
 

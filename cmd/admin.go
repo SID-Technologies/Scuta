@@ -85,7 +85,7 @@ func runAdminKeygen(outPrefix string) error {
 	}
 
 	output.Success("Wrote %s (private — keep offline) and %s", keyPath, pubPath)
-	output.Info("Clients trust it via: scuta config set signature_public_key \"$(cat %s)\"", pubPath)
+	output.Info("Clients trust it via: scuta config set -- signature_public_key \"$(cat %s)\"", pubPath)
 
 	return nil
 }

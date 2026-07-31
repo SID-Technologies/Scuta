@@ -214,7 +214,7 @@ the signature from `<url>.sig`.
 **3. Clients: trust the key and (optionally) fail closed:**
 
 ```bash
-scuta config set signature_public_key "$(cat scuta-signing.pub)"
+scuta config set -- signature_public_key "$(cat scuta-signing.pub)"
 scuta config set require_signed_metadata true
 ```
 

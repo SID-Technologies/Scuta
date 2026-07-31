@@ -246,3 +246,82 @@ func TestResolveAsset_EmptyTemplateUsesHeuristic(t *testing.T) {
 		t.Fatalf("expected bat-v0.26.1-aarch64-apple-darwin.tar.gz, got %s", asset.Name)
 	}
 }
+
+// fzf055Assets is the real asset list of junegunn/fzf v0.55.0. It mixes
+// "-" and "_" separators and its darwin assets contain the substring "win",
+// which historically caused the darwin binary to be installed on Windows.
+func fzf055Assets() []Asset {
+	names := []string{
+		"fzf-0.55.0-darwin_amd64.tar.gz",
+		"fzf-0.55.0-darwin_arm64.tar.gz",
+		"fzf-0.55.0-freebsd_amd64.tar.gz",
+		"fzf-0.55.0-linux_amd64.tar.gz",
+		"fzf-0.55.0-linux_arm64.tar.gz",
+		"fzf-0.55.0-linux_armv5.tar.gz",
+		"fzf-0.55.0-linux_armv6.tar.gz",
+		"fzf-0.55.0-linux_armv7.tar.gz",
+		"fzf-0.55.0-linux_loong64.tar.gz",
+		"fzf-0.55.0-linux_ppc64le.tar.gz",
+		"fzf-0.55.0-linux_s390x.tar.gz",
+		"fzf-0.55.0-openbsd_amd64.tar.gz",
+		"fzf-0.55.0-windows_amd64.zip",
+		"fzf-0.55.0-windows_arm64.zip",
+		"fzf-0.55.0-windows_armv5.zip",
+		"fzf-0.55.0-windows_armv6.zip",
+		"fzf-0.55.0-windows_armv7.zip",
+		"fzf_0.55.0_checksums.txt",
+	}
+	assets := make([]Asset, 0, len(names))
+	for _, n := range names {
+		assets = append(assets, Asset{Name: n})
+	}
+	return assets
+}
+
+func TestFindAssetHeuristic_MixedSeparators(t *testing.T) {
+	// Regression: "win" alias must not match inside "darwin", and mixed
+	// -/_ separators must resolve to the exact platform asset.
+	cases := []struct {
+		goos, goarch, want string
+	}{
+		{"windows", "amd64", "fzf-0.55.0-windows_amd64.zip"},
+		{"windows", "arm64", "fzf-0.55.0-windows_arm64.zip"},
+		{"darwin", "amd64", "fzf-0.55.0-darwin_amd64.tar.gz"},
+		{"darwin", "arm64", "fzf-0.55.0-darwin_arm64.tar.gz"},
+		{"linux", "amd64", "fzf-0.55.0-linux_amd64.tar.gz"},
+		{"linux", "arm64", "fzf-0.55.0-linux_arm64.tar.gz"},
+	}
+
+	for _, tc := range cases {
+		asset, err := FindAssetHeuristic(fzf055Assets(), tc.goos, tc.goarch)
+		if err != nil {
+			t.Fatalf("%s/%s: unexpected error: %v", tc.goos, tc.goarch, err)
+		}
+		if asset.Name != tc.want {
+			t.Errorf("%s/%s: got %s, want %s", tc.goos, tc.goarch, asset.Name, tc.want)
+		}
+	}
+}
+
+func TestContainsToken(t *testing.T) {
+	cases := []struct {
+		s, token string
+		want     bool
+	}{
+		{"fzf-0.55.0-darwin_amd64.tar.gz", "win", false},
+		{"fzf-0.55.0-windows_amd64.zip", "windows", true},
+		{"tool-win64.zip", "win64", true},
+		{"tool-win-x64.zip", "win", true},
+		{"tool-win-x64.zip", "x64", true},
+		{"tool_linux_amd64.tar.gz", "amd64", true},
+		{"tool_linux_arm64.tar.gz", "amd64", false},
+		{"windows.zip", "windows", true},
+		{"anything", "", false},
+	}
+
+	for _, tc := range cases {
+		if got := containsToken(tc.s, tc.token); got != tc.want {
+			t.Errorf("containsToken(%q, %q) = %v, want %v", tc.s, tc.token, got, tc.want)
+		}
+	}
+}

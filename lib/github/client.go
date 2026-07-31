@@ -336,31 +336,28 @@ func buildPatterns(os, arch string) []matchPattern {
 
 	var patterns []matchPattern
 	for _, ext := range extensions {
-		// {name}_{os}_{arch}.tar.gz — standard GoReleaser
-		patterns = append(patterns, matchPattern{os: os, arch: arch, ext: ext, separator: "_"})
-		// {name}-{os}-{arch}.tar.gz — dash separator
-		patterns = append(patterns, matchPattern{os: os, arch: arch, ext: ext, separator: "-"})
+		patterns = append(patterns, matchPattern{os: os, arch: arch, ext: ext})
 	}
 
 	return patterns
 }
 
 type matchPattern struct {
-	os        string
-	arch      string
-	ext       string
-	separator string
+	os   string
+	arch string
+	ext  string
 }
 
 // matchesPattern checks if a filename matches the given OS/arch/ext pattern.
+// OS and arch must appear as delimited tokens, regardless of whether the
+// release uses "_", "-", or a mix as separators (e.g. fzf ships
+// "fzf-0.55.0-windows_amd64.zip").
 func matchesPattern(filename string, p matchPattern) bool {
 	if !strings.HasSuffix(filename, p.ext) {
 		return false
 	}
 
-	// Check that the filename contains both os and arch segments
-	return strings.Contains(filename, p.separator+p.os+p.separator+p.arch) ||
-		strings.Contains(filename, p.separator+p.os+p.separator) && strings.Contains(filename, p.separator+p.arch+".")
+	return containsToken(filename, p.os) && containsToken(filename, p.arch)
 }
 
 // normalizeOS normalizes OS names to match GoReleaser conventions.

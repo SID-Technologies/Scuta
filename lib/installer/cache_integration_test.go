@@ -81,10 +81,13 @@ func TestFetchVerifiedAssetCacheHit(t *testing.T) {
 	}
 
 	dest := filepath.Join(t.TempDir(), "tool.tar.gz")
-	err := inst.fetchVerifiedAsset(context.Background(), release,
+	verified, err := inst.fetchVerifiedAsset(context.Background(), release,
 		"tool_1.0.0_linux_amd64.tar.gz", srv.URL+"/asset", "tool", dest, false, false)
 	if err != nil {
 		t.Fatalf("fetchVerifiedAsset: %v", err)
+	}
+	if !verified {
+		t.Fatal("expected verified=true when checksum verification succeeded")
 	}
 
 	if n := assetRequests.Load(); n != 0 {
@@ -136,7 +139,7 @@ func TestFetchVerifiedAssetCacheDisabled(t *testing.T) {
 	// The plain-http URL is rejected by DownloadAsset's HTTPS validation,
 	// which is exactly the signal that the download path was taken.
 	dest := filepath.Join(t.TempDir(), "tool.tar.gz")
-	err := inst.fetchVerifiedAsset(context.Background(), release,
+	_, err := inst.fetchVerifiedAsset(context.Background(), release,
 		"tool.tar.gz", srv.URL+"/asset", "tool", dest, false, false)
 	if err == nil {
 		t.Fatal("expected download attempt (and HTTPS rejection) with cache disabled")
@@ -164,7 +167,7 @@ func TestFetchVerifiedAssetSkipVerifyBypassesCache(t *testing.T) {
 	release := &github.Release{TagName: "v1.0.0"}
 
 	dest := filepath.Join(t.TempDir(), "tool.tar.gz")
-	err := inst.fetchVerifiedAsset(context.Background(), release,
+	_, err := inst.fetchVerifiedAsset(context.Background(), release,
 		"tool.tar.gz", "http://127.0.0.1:0/asset", "tool", dest, true, false)
 	// skipVerify resolves no hash, so it must go straight to the (rejected)
 	// download rather than serving the cached entry.

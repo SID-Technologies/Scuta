@@ -76,6 +76,8 @@ scuta update
 | `scuta info <tool>` | Show detailed information about a tool |
 | `scuta doctor` | Health check (PATH, binaries, state, CVEs) |
 | `scuta doctor --skip-cve` | Skip CVE check (for offline environments) |
+| `scuta doctor --audit` | Security audit: provenance, tamper detection, policy, posture |
+| `scuta doctor --audit --json` | Audit report as JSON (for CI / fleet aggregation) |
 | `scuta history` | Show install/update history |
 | `scuta rollback <tool>` | Reinstall the previous version from history |
 | `scuta sync` | Reconcile installed tools to a declarative manifest (scuta.lock.yaml) |

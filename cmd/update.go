@@ -250,6 +250,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			UpdatedAt:   time.Now(),
 			BinaryPath:  result.BinaryPath,
 			Repo:        st.Tools[u.Name].Repo,
+			Sha256:      result.Sha256,
+			Verified:    result.Verified,
 		})
 
 		output.Success("Updated %s %s → %s", u.Name, u.CurrentVersion, result.Version)

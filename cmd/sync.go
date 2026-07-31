@@ -317,6 +317,8 @@ func applySyncAction(
 		InstalledAt: time.Now(),
 		BinaryPath:  result.BinaryPath,
 		Repo:        repo,
+		Sha256:      result.Sha256,
+		Verified:    result.Verified,
 	})
 	res.Version = result.Version
 	res.Success = true

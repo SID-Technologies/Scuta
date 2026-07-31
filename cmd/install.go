@@ -453,6 +453,8 @@ func installOneTool(
 		Version:     result.Version,
 		InstalledAt: time.Now(),
 		BinaryPath:  result.BinaryPath,
+		Sha256:      result.Sha256,
+		Verified:    result.Verified,
 	})
 
 	output.Success("Installed %s %s", toolName, result.Version)
@@ -618,6 +620,8 @@ func runInstallFromArchive(ctx context.Context, args []string, archivePath strin
 		Version:     result.Version,
 		InstalledAt: time.Now(),
 		BinaryPath:  result.BinaryPath,
+		Sha256:      result.Sha256,
+		Verified:    result.Verified,
 	})
 
 	if err := st.Save(scutaDir); err != nil {
@@ -735,6 +739,7 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 	}
 
 	// Best-effort checksum verification for unregistered tools
+	checksumVerified := false
 	if skipVerifyFlag {
 		output.Warning("Skipping checksum verification (--skip-verify)")
 	} else {
@@ -752,6 +757,7 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 					return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("checksum mismatch for %s: %v", toolName, verifyErr))
 				}
 				output.Debugf("Checksum verified for %s", asset.Name)
+				checksumVerified = true
 			}
 		}
 	}
@@ -796,12 +802,19 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 		binaryPath = result.BinaryPath
 	}
 
-	// Update state with repo info
+	// Update state with repo info. Hashing failure is non-fatal — the
+	// install already succeeded; audit reports the tool as unknown instead.
+	binarySha, shaErr := installer.FileSHA256(binaryPath)
+	if shaErr != nil {
+		output.Debugf("Could not hash installed binary %s: %v", binaryPath, shaErr)
+	}
 	st.SetTool(toolName, state.ToolState{
 		Version:     version,
 		InstalledAt: time.Now(),
 		BinaryPath:  binaryPath,
 		Repo:        repo,
+		Sha256:      binarySha,
+		Verified:    checksumVerified,
 	})
 
 	if err := st.Save(stateDir); err != nil {

@@ -164,6 +164,8 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		UpdatedAt:   time.Now(),
 		BinaryPath:  result.BinaryPath,
 		Repo:        ts.Repo,
+		Sha256:      result.Sha256,
+		Verified:    result.Verified,
 	})
 	if err := st.Save(scutaDir); err != nil {
 		output.Error("Failed to save state: %v", err)

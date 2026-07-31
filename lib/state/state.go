@@ -21,6 +21,14 @@ type ToolState struct {
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 	BinaryPath  string    `json:"binary_path"`
 	Repo        string    `json:"repo,omitempty"`
+	// Sha256 is the SHA-256 of the installed binary, recorded at install
+	// time. Empty for tools installed before this field existed; audit
+	// reports those as unknown provenance rather than failing them.
+	Sha256 string `json:"sha256,omitempty"`
+	// Verified records whether checksum verification against upstream
+	// checksums actually happened for this install. Only meaningful when
+	// Sha256 is set.
+	Verified bool `json:"verified,omitempty"`
 }
 
 // CurrentStateVersion is the current state file format version.

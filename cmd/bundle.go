@@ -388,6 +388,8 @@ func runBundleInstall(cmd *cobra.Command, args []string) error {
 			Version:     info.Version,
 			InstalledAt: time.Now(),
 			BinaryPath:  result.BinaryPath,
+			Sha256:      result.Sha256,
+			Verified:    result.Verified,
 		})
 
 		output.Success("Installed %s %s", name, info.Version)
@@ -429,11 +431,21 @@ func installBundleTool(inst *installer.Installer, tmpDir string, man *installer.
 	}
 
 	assetPath := fmt.Sprintf("%s/%s", tmpDir, relPath)
+	verified := false
 	if !skipVerify && checksum != "" {
 		if err := installer.VerifyChecksum(assetPath, checksum); err != nil {
 			return nil, err
 		}
+		verified = true
 	}
 
-	return inst.InstallFromArchive(name, assetPath)
+	result, err := inst.InstallFromArchive(name, assetPath)
+	if err != nil {
+		return nil, err
+	}
+	// InstallFromArchive cannot know about the bundle manifest checksum;
+	// mark verified here when it passed.
+	result.Verified = verified
+
+	return result, nil
 }

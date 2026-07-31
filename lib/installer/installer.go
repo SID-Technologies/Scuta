@@ -32,6 +32,11 @@ type Installer struct {
 type InstallResult struct {
 	Version    string
 	BinaryPath string
+	// Sha256 is the SHA-256 of the installed binary, for recording in state.
+	Sha256 string
+	// Verified is true when the downloaded asset's checksum was verified
+	// against the release's checksums file.
+	Verified bool
 }
 
 // InstallOpts provides extended options for tool installation.
@@ -136,7 +141,8 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 
 	// Fetch + verify (fail-closed: any checksum failure is an error unless --skip-verify)
 	archivePath := filepath.Join(tmpDir, asset.Name)
-	if err := inst.fetchVerifiedAsset(ctx, release, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, false); err != nil {
+	verified, err := inst.fetchVerifiedAsset(ctx, release, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, false)
+	if err != nil {
 		return nil, err
 	}
 
@@ -198,10 +204,7 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 
 	output.Debugf("Installed %s %s to %s", toolName, version, binaryPath)
 
-	return &InstallResult{
-		Version:    version,
-		BinaryPath: binaryPath,
-	}, nil
+	return newInstallResult(version, binaryPath, verified), nil
 }
 
 // InstallWithOpts downloads and installs a tool binary with extended options.
@@ -271,7 +274,8 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 
 	// Fetch + verify (BestEffort softens missing checksums to warnings)
 	archivePath := filepath.Join(tmpDir, asset.Name)
-	if err := inst.fetchVerifiedAsset(ctx, release, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, opts.BestEffort); err != nil {
+	verified, err := inst.fetchVerifiedAsset(ctx, release, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, opts.BestEffort)
+	if err != nil {
 		return nil, err
 	}
 
@@ -286,7 +290,7 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 
 	// Handle raw binaries (no archive extraction needed)
 	if github.IsRawBinary(asset.Name) {
-		return inst.installRawBinary(archivePath, binaryPath, effectiveBinName, version)
+		return inst.installRawBinary(archivePath, binaryPath, effectiveBinName, version, verified)
 	}
 
 	// Extract archive
@@ -336,10 +340,24 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 
 	output.Debugf("Installed %s %s to %s", effectiveBinName, version, binaryPath)
 
+	return newInstallResult(version, binaryPath, verified), nil
+}
+
+// newInstallResult builds an InstallResult, recording the SHA-256 of the
+// installed binary so state can later detect out-of-band modification.
+// Hashing failure is not fatal — the install itself already succeeded.
+func newInstallResult(version, binaryPath string, verified bool) *InstallResult {
+	sha, err := FileSHA256(binaryPath)
+	if err != nil {
+		output.Debugf("Could not hash installed binary %s: %v", binaryPath, err)
+	}
+
 	return &InstallResult{
 		Version:    version,
 		BinaryPath: binaryPath,
-	}, nil
+		Sha256:     sha,
+		Verified:   verified,
+	}
 }
 
 // fetchVerifiedAsset obtains a release asset into destPath and applies
@@ -350,10 +368,11 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 // bestEffort softens missing-checksum conditions (no checksums file, no
 // entry for this asset) to warnings. A checksum that is present but fails
 // to match is always fatal, and unverified assets are never cached.
-func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.Release, assetName, downloadURL, toolName, destPath string, skipVerify, bestEffort bool) error {
+// It reports whether checksum verification was actually performed.
+func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.Release, assetName, downloadURL, toolName, destPath string, skipVerify, bestEffort bool) (bool, error) {
 	expectedHash, err := inst.resolveExpectedHash(ctx, release, assetName, toolName, skipVerify, bestEffort)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	fromCache := false
@@ -369,13 +388,13 @@ func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.R
 
 	if !fromCache {
 		if err := inst.github.DownloadAsset(ctx, downloadURL, destPath); err != nil {
-			return errors.Wrap(err, "downloading %s", assetName)
+			return false, errors.Wrap(err, "downloading %s", assetName)
 		}
 	}
 
 	if expectedHash != "" {
 		if err := VerifyChecksum(destPath, expectedHash); err != nil {
-			return errors.Wrap(err, "checksum verification failed for %s", toolName)
+			return false, errors.Wrap(err, "checksum verification failed for %s", toolName)
 		}
 		output.Debugf("Checksum verified for %s", assetName)
 
@@ -390,13 +409,13 @@ func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.R
 	// Signature verification (when public key is configured)
 	if len(inst.signaturePubKey) > 0 {
 		if err := DownloadAndVerifySignature(ctx, inst.github, release, assetName, destPath, inst.signaturePubKey, inst.requireSignature); err != nil {
-			return errors.Wrap(err, "signature verification failed for %s", toolName)
+			return false, errors.Wrap(err, "signature verification failed for %s", toolName)
 		}
 	} else if inst.requireSignature {
-		return errors.New("signature required but no public key configured (set signature_public_key in config)")
+		return false, errors.New("signature required but no public key configured (set signature_public_key in config)")
 	}
 
-	return nil
+	return expectedHash != "", nil
 }
 
 // resolveExpectedHash fetches the release checksums file and returns the
@@ -438,7 +457,7 @@ func (inst *Installer) resolveExpectedHash(ctx context.Context, release *github.
 }
 
 // installRawBinary handles installing a raw binary (not an archive).
-func (*Installer) installRawBinary(srcPath, binaryPath, binName, version string) (*InstallResult, error) {
+func (*Installer) installRawBinary(srcPath, binaryPath, binName, version string, verified bool) (*InstallResult, error) {
 	tempPath := binaryPath + ".tmp"
 	if err := copyFile(srcPath, tempPath); err != nil {
 		os.Remove(tempPath)
@@ -457,10 +476,7 @@ func (*Installer) installRawBinary(srcPath, binaryPath, binName, version string)
 
 	output.Debugf("Installed raw binary %s %s to %s", binName, version, binaryPath)
 
-	return &InstallResult{
-		Version:    version,
-		BinaryPath: binaryPath,
-	}, nil
+	return newInstallResult(version, binaryPath, verified), nil
 }
 
 // InstallFromArchive installs a tool from a local archive file (offline/air-gapped install).
@@ -529,10 +545,7 @@ func (inst *Installer) InstallFromArchive(toolName string, archivePath string) (
 
 	output.Debugf("Installed %s %s from archive to %s", toolName, version, binaryPath)
 
-	return &InstallResult{
-		Version:    version,
-		BinaryPath: binaryPath,
-	}, nil
+	return newInstallResult(version, binaryPath, false), nil
 }
 
 // parseVersionFromFilename tries to extract a semver-like version from a filename.

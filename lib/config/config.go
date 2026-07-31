@@ -66,6 +66,11 @@ type Config struct {
 	// AuditLogDestination controls where audit log entries are sent.
 	// Supported values: "" (disabled), "stdout", "syslog", or a webhook URL.
 	AuditLogDestination string `yaml:"audit_log_destination,omitempty"`
+
+	// DisableDownloadCache turns off the content-addressed download cache
+	// (~/.scuta/cache). The cache only ever stores checksum-verified assets,
+	// so it is enabled by default.
+	DisableDownloadCache bool `yaml:"disable_download_cache,omitempty"`
 }
 
 // DefaultConfig returns a Config with default values.
@@ -133,7 +138,7 @@ func (c Config) UpdateIntervalDuration() time.Duration {
 
 // ValidKeys returns the list of valid configuration keys.
 func ValidKeys() []string {
-	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url", "config_url", "telemetry", "require_signature", "signature_public_key", "require_signed_metadata", "audit_log_destination"}
+	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url", "config_url", "telemetry", "require_signature", "signature_public_key", "require_signed_metadata", "audit_log_destination", "disable_download_cache"}
 }
 
 // DefaultValue returns the default value for a given config key.
@@ -150,7 +155,7 @@ func DefaultValue(key string) string {
 		return defaults.GithubBaseURL
 	case "policy_url":
 		return defaults.PolicyURL
-	case "telemetry", "require_signature", "require_signed_metadata":
+	case "telemetry", "require_signature", "require_signed_metadata", "disable_download_cache":
 		return "false"
 	default:
 		return ""
@@ -171,6 +176,10 @@ func (c Config) FieldMap() map[string]string {
 	if c.RequireSignedMetadata {
 		requireSignedMetaStr = "true"
 	}
+	disableCacheStr := "false"
+	if c.DisableDownloadCache {
+		disableCacheStr = "true"
+	}
 	return map[string]string{
 		"update_interval":         c.UpdateInterval,
 		"github_token":            c.GithubToken,
@@ -183,6 +192,7 @@ func (c Config) FieldMap() map[string]string {
 		"signature_public_key":    c.SignaturePublicKey,
 		"require_signed_metadata": requireSignedMetaStr,
 		"audit_log_destination":   c.AuditLogDestination,
+		"disable_download_cache":  disableCacheStr,
 	}
 }
 
@@ -212,6 +222,8 @@ func (c *Config) SetField(key, value string) error {
 		c.RequireSignedMetadata = value == "true" || value == "1" || value == "yes"
 	case "audit_log_destination":
 		c.AuditLogDestination = value
+	case "disable_download_cache":
+		c.DisableDownloadCache = value == "true" || value == "1" || value == "yes"
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

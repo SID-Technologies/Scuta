@@ -48,7 +48,10 @@ Example manifest:
     bat: "latest"
 
 This makes the org's toolset reproducible: commit the manifest, and every
-engineer runs 'scuta sync' to converge to the same set and versions.`,
+engineer runs 'scuta sync' to converge to the same set and versions.
+
+In CI, use --check as a drift gate: it applies nothing and exits with
+code 8 when the machine diverges from the manifest.`,
 		Args: cobra.NoArgs,
 		RunE: runSync,
 	}
@@ -56,7 +59,10 @@ engineer runs 'scuta sync' to converge to the same set and versions.`,
 	cmd.Flags().StringP("file", "f", "", "Path to the manifest (default: scuta.lock.yaml in the current directory)")
 	cmd.Flags().Bool("prune", false, "Remove installed tools that are not in the manifest")
 	cmd.Flags().Bool("dry-run", false, "Show the reconciliation plan without applying it")
+	cmd.Flags().Bool("check", false, "Exit non-zero if the machine diverges from the manifest (CI gate; changes nothing)")
 	cmd.Flags().Bool("skip-verify", false, "Skip checksum verification")
+
+	cmd.MarkFlagsMutuallyExclusive("check", "dry-run")
 
 	return cmd
 }
@@ -73,6 +79,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	fileFlag, _ := cmd.Flags().GetString("file")
 	pruneFlag, _ := cmd.Flags().GetBool("prune")
 	dryRunFlag, _ := cmd.Flags().GetBool("dry-run")
+	checkFlag, _ := cmd.Flags().GetBool("check")
 	skipVerifyFlag, _ := cmd.Flags().GetBool("skip-verify")
 
 	manifestPath := fileFlag
@@ -122,6 +129,11 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	printSyncPlan(changes)
 
+	if checkFlag {
+		return exitcodes.NewError(exitcodes.Drift,
+			fmt.Sprintf("drift detected: %d change(s) needed to match the manifest", len(changes)))
+	}
+
 	if dryRunFlag {
 		return nil
 	}
@@ -139,6 +151,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	token := auth.ResolveTokenWithConfig(scutaDir)
 	ghClient := newGitHubClient(token, scutaDir)
 	inst := installer.New(ghClient, scutaDir)
+	applyDownloadCacheConfig(inst, scutaDir)
 	pol := loadPolicy(scutaDir)
 
 	start := time.Now()

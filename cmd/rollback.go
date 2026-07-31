@@ -124,6 +124,7 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	token := auth.ResolveTokenWithConfig(scutaDir)
 	ghClient := newGitHubClient(token, scutaDir)
 	inst := installer.New(ghClient, scutaDir)
+	applyDownloadCacheConfig(inst, scutaDir)
 
 	output.Info("Rolling back %s %s → %s...", toolName, ts.Version, prevVersion)
 

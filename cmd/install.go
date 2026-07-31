@@ -176,6 +176,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	if cfgLoadErr == nil && (cfg.RequireSignature || cfg.SignaturePublicKey != "") {
 		inst.SetSignatureVerification(cfg.RequireSignature, []byte(cfg.SignaturePublicKey))
 	}
+	applyDownloadCacheConfig(inst, scutaDir)
 
 	start := time.Now()
 
@@ -688,6 +689,7 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 		}
 		inst = installer.New(ghClient, scutaDir)
 	}
+	applyDownloadCacheConfig(inst, scutaDir)
 
 	// Check if already installed (skip unless force)
 	if !forceFlag && versionFlag == "" {

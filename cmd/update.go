@@ -180,6 +180,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	} else {
 		inst = installer.New(ghClient, scutaDir)
 	}
+	applyDownloadCacheConfig(inst, scutaDir)
 	pol := loadPolicy(scutaDir)
 	start := time.Now()
 	var toolResults []history.ToolResult

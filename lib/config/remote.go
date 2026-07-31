@@ -106,18 +106,33 @@ func fetchRemoteConfig(scutaDir string, configURL string, trust Config) (Config,
 		}
 	}
 
+	cfg, err := FetchRemote(scutaDir, configURL, trust)
+	if err != nil {
+		// Fall back to the cached version (written only after a successful
+		// fetch, so under require_signed_metadata it was verified at write).
+		if cached, cacheErr := loadFile(cachePath); cacheErr == nil {
+			output.Debugf("Using cached remote config after fetch failure: %v", err)
+			return cached, nil
+		}
+		return Config{}, err
+	}
+
+	return cfg, nil
+}
+
+// FetchRemote fetches, verifies, and parses an org config from a URL,
+// always hitting the network (no cache read). `scuta init --from` uses it
+// to bootstrap a machine: the first fetch must go to the source so a bad
+// URL, unreachable host, or invalid signature fails loudly instead of
+// silently reusing stale state. On success the payload is written to the
+// local cache for the regular LoadWithMerge path.
+func FetchRemote(scutaDir string, configURL string, trust Config) (Config, error) {
 	data, err := fetch.Verified(configURL, fetch.Options{
 		PublicKeyPEM:     []byte(trust.SignaturePublicKey),
 		RequireSignature: trust.RequireSignedMetadata,
 		MaxSize:          maxRemoteConfigSize,
 	})
 	if err != nil {
-		// Fall back to the cached version (written only after a successful
-		// fetch, so under require_signed_metadata it was verified at write).
-		if cfg, cacheErr := loadFile(cachePath); cacheErr == nil {
-			output.Debugf("Using cached remote config after fetch failure: %v", err)
-			return cfg, nil
-		}
 		return Config{}, errors.Wrap(err, "fetching remote config from %s", configURL)
 	}
 
@@ -128,7 +143,7 @@ func fetchRemoteConfig(scutaDir string, configURL string, trust Config) (Config,
 
 	// Cache the result
 	_ = os.MkdirAll(scutaDir, 0o700)
-	_ = os.WriteFile(cachePath, data, 0o600)
+	_ = os.WriteFile(filepath.Join(scutaDir, remoteConfigCache), data, 0o600)
 
 	return cfg, nil
 }

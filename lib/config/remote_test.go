@@ -385,3 +385,93 @@ func TestLoadTrustedIgnoresRemote(t *testing.T) {
 		t.Errorf("LoadTrusted should still read local config: got %q", trusted.ConfigURL)
 	}
 }
+
+func TestFetchRemoteBypassesCache(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		_, _ = w.Write([]byte("update_interval: 48h\n"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+
+	// Pre-populate a FRESH cache with different content; FetchRemote must
+	// ignore it and hit the network (that is the whole point for init --from).
+	cachePath := filepath.Join(tmpDir, remoteConfigCache)
+	if err := os.WriteFile(cachePath, []byte("update_interval: 99h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := FetchRemote(tmpDir, server.URL, Config{})
+	if err != nil {
+		t.Fatalf("FetchRemote failed: %v", err)
+	}
+	if callCount != 1 {
+		t.Errorf("expected 1 HTTP call, got %d", callCount)
+	}
+	if cfg.UpdateInterval != "48h" {
+		t.Errorf("expected network value 48h, got %q", cfg.UpdateInterval)
+	}
+
+	// The cache must now hold the fresh payload for LoadWithMerge.
+	cached, err := loadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.UpdateInterval != "48h" {
+		t.Errorf("cache should be refreshed: got %q", cached.UpdateInterval)
+	}
+}
+
+func TestFetchRemoteSignedRequired(t *testing.T) {
+	payload := []byte("registry_url: https://corp.example.com/registry.yaml\n")
+	server, pub := signingTestServer(t, payload, true, false)
+	defer server.Close()
+
+	trust := Config{
+		SignaturePublicKey:    string(pub),
+		RequireSignedMetadata: true,
+	}
+
+	cfg, err := FetchRemote(t.TempDir(), server.URL+"/config.yaml", trust)
+	if err != nil {
+		t.Fatalf("signed FetchRemote failed: %v", err)
+	}
+	if cfg.RegistryURL != "https://corp.example.com/registry.yaml" {
+		t.Errorf("unexpected registry_url: %q", cfg.RegistryURL)
+	}
+}
+
+func TestFetchRemoteUnsignedRequiredFailsWithoutCacheFallback(t *testing.T) {
+	payload := []byte("update_interval: 48h\n")
+	server, pub := signingTestServer(t, payload, false, false)
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+
+	// Even a valid cache must not save an init-time fetch that fails closed.
+	cachePath := filepath.Join(tmpDir, remoteConfigCache)
+	if err := os.WriteFile(cachePath, []byte("update_interval: 72h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	trust := Config{
+		SignaturePublicKey:    string(pub),
+		RequireSignedMetadata: true,
+	}
+	if _, err := FetchRemote(tmpDir, server.URL+"/config.yaml", trust); err == nil {
+		t.Fatal("expected error: signature required but missing")
+	}
+}
+
+func TestFetchRemoteInvalidYAMLFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{{{not yaml"))
+	}))
+	defer server.Close()
+
+	if _, err := FetchRemote(t.TempDir(), server.URL, Config{}); err == nil {
+		t.Fatal("expected parse error for invalid YAML")
+	}
+}

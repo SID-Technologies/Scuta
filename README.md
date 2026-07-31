@@ -63,6 +63,7 @@ scuta update
 | Command | Description |
 |---------|-------------|
 | `scuta init` | Setup ~/.scuta/, detect auth, configure PATH |
+| `scuta init --from <url> [--key <pub.pem>]` | Non-interactive bootstrap from an org config URL |
 | `scuta install <tool>` | Install a tool from the registry |
 | `scuta install <tool> --from <archive>` | Install from a local archive (offline) |
 | `scuta install --all` | Install all tools |
@@ -282,6 +283,24 @@ During `scuta init` you can pick a mode up front:
 | **Local only** | No remote registry — manage tools manually via `scuta registry add` |
 
 Change anytime with `scuta config set registry_url <url>` or `scuta config set registry_url local`.
+
+### Org bootstrap
+
+Point a new machine at your org in one command — no prompts, CI-friendly:
+
+```bash
+scuta init --from https://example.com/scuta/config.yaml --key org.pub
+```
+
+This installs `org.pub` as the local trust root *before* anything is fetched,
+enables `require_signed_metadata` (all remote metadata fails closed from then
+on), verifies and applies the org config, and saves the URL as `config_url` so
+future runs keep pulling org settings (registry, policy, security flags).
+Bootstrapping without `--key` works but is unverified — Scuta warns.
+
+To publish an org config, start from the
+[registry-starter](https://github.com/sid-technologies/registry-starter)
+template.
 
 ## Global Flags
 

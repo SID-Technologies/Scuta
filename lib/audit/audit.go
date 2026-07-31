@@ -198,7 +198,7 @@ func auditTool(name string, ts state.ToolState, pol *policy.Policy) Tool {
 	}
 	t.Present = true
 
-	t.Executable = info.Mode()&0o111 != 0
+	t.Executable = isExecutable(info)
 	if !t.Executable {
 		t.Findings = append(t.Findings, Finding{
 			Severity: SeverityCritical,
@@ -285,6 +285,17 @@ func (r *Report) Finalize() {
 	for i := range r.Tools {
 		count(r.Tools[i].Findings)
 	}
+}
+
+// isExecutable reports whether the file should be considered executable.
+// Windows has no POSIX execute bits (Go reports none on regular files),
+// so presence is sufficient there; executability is determined by the
+// .exe extension, which scuta controls at install time.
+func isExecutable(info os.FileInfo) bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode()&0o111 != 0
 }
 
 // fileSHA256 returns the lowercase hex SHA-256 of the file at path.

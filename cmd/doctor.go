@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/sid-technologies/scuta/lib/audit"
 	"github.com/sid-technologies/scuta/lib/auth"
@@ -117,7 +118,8 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 				issues++
 				continue
 			}
-			if info.Mode()&0o111 == 0 {
+			// Windows has no POSIX execute bits; presence is sufficient there.
+			if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 				output.PrintCheck(false, "%s binary is executable", name)
 				allGood = false
 				issues++

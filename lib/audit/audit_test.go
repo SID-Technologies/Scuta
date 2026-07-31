@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -202,5 +203,28 @@ func TestFinalizeCounts(t *testing.T) {
 	}
 	if r.GeneratedAt.After(time.Now()) {
 		t.Fatal("GeneratedAt in the future")
+	}
+}
+
+func TestIsExecutable_WindowsHasNoExecBits(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "tool")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := isExecutable(info)
+	if runtime.GOOS == "windows" {
+		// Windows reports no POSIX exec bits on regular files; presence
+		// must be sufficient or every audited tool goes critical.
+		if !got {
+			t.Fatal("expected executable=true on windows")
+		}
+	} else if got {
+		t.Fatal("expected executable=false for 0o644 on POSIX")
 	}
 }

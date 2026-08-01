@@ -313,6 +313,16 @@ template.
 | `--quiet, -q` | Suppress non-error output |
 | `--json` | Output in JSON format |
 
+## Roadmap
+
+Direction, not commitment (as of v1.x):
+
+- PATH shadowing detection: warn when an unmanaged binary earlier in PATH shadows a Scuta-verified one
+- Audit adapters for existing package managers (brew, apt, mise), answering the same four questions Scuta answers for its own installs: where did it come from, does the binary still match, is there provenance, has it drifted
+- SBOM export for managed tools
+
+Non-goals: replacing your package manager, language-level dependencies (npm, pip, cargo), Windows package managers.
+
 ## License
 
 BSL 1.1

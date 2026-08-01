@@ -71,6 +71,22 @@ type Config struct {
 	// (~/.scuta/cache). The cache only ever stores checksum-verified assets,
 	// so it is enabled by default.
 	DisableDownloadCache bool `yaml:"disable_download_cache,omitempty"`
+
+	// ProvenanceVerify controls the optional post-download provenance
+	// backends (cosign keyless signatures, SLSA attestations) that run via
+	// the cosign / slsa-verifier CLIs. Values: "off" (default), "auto"
+	// (verify when material and CLI are available), "require" (fail the
+	// install unless at least one backend verifies the asset).
+	ProvenanceVerify string `yaml:"provenance_verify,omitempty"`
+
+	// CosignIdentityRegexp overrides the expected certificate identity for
+	// cosign keyless verification. Like the signature trust root, it is
+	// only honored from local or system config — never from remote config.
+	CosignIdentityRegexp string `yaml:"cosign_identity_regexp,omitempty"`
+
+	// CosignOIDCIssuer overrides the expected OIDC issuer for cosign
+	// keyless verification (default: GitHub Actions). Local/system only.
+	CosignOIDCIssuer string `yaml:"cosign_oidc_issuer,omitempty"`
 }
 
 // DefaultConfig returns a Config with default values.
@@ -138,7 +154,7 @@ func (c Config) UpdateIntervalDuration() time.Duration {
 
 // ValidKeys returns the list of valid configuration keys.
 func ValidKeys() []string {
-	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url", "config_url", "telemetry", "require_signature", "signature_public_key", "require_signed_metadata", "audit_log_destination", "disable_download_cache"}
+	return []string{"update_interval", "github_token", "registry_url", "github_base_url", "policy_url", "config_url", "telemetry", "require_signature", "signature_public_key", "require_signed_metadata", "audit_log_destination", "disable_download_cache", "provenance_verify", "cosign_identity_regexp", "cosign_oidc_issuer"}
 }
 
 // DefaultValue returns the default value for a given config key.
@@ -157,6 +173,8 @@ func DefaultValue(key string) string {
 		return defaults.PolicyURL
 	case "telemetry", "require_signature", "require_signed_metadata", "disable_download_cache":
 		return "false"
+	case "provenance_verify":
+		return "off"
 	default:
 		return ""
 	}
@@ -180,6 +198,10 @@ func (c Config) FieldMap() map[string]string {
 	if c.DisableDownloadCache {
 		disableCacheStr = "true"
 	}
+	provenanceStr := c.ProvenanceVerify
+	if provenanceStr == "" {
+		provenanceStr = "off"
+	}
 	return map[string]string{
 		"update_interval":         c.UpdateInterval,
 		"github_token":            c.GithubToken,
@@ -193,6 +215,9 @@ func (c Config) FieldMap() map[string]string {
 		"require_signed_metadata": requireSignedMetaStr,
 		"audit_log_destination":   c.AuditLogDestination,
 		"disable_download_cache":  disableCacheStr,
+		"provenance_verify":       provenanceStr,
+		"cosign_identity_regexp":  c.CosignIdentityRegexp,
+		"cosign_oidc_issuer":      c.CosignOIDCIssuer,
 	}
 }
 
@@ -224,6 +249,12 @@ func (c *Config) SetField(key, value string) error {
 		c.AuditLogDestination = value
 	case "disable_download_cache":
 		c.DisableDownloadCache = value == "true" || value == "1" || value == "yes"
+	case "provenance_verify":
+		c.ProvenanceVerify = value
+	case "cosign_identity_regexp":
+		c.CosignIdentityRegexp = value
+	case "cosign_oidc_issuer":
+		c.CosignOIDCIssuer = value
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

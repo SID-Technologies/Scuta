@@ -16,6 +16,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/errors"
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/output"
+	"github.com/sid-technologies/scuta/lib/provenance"
 )
 
 // Installer manages downloading and installing tool binaries.
@@ -26,6 +27,9 @@ type Installer struct {
 	requireSignature bool
 	signaturePubKey  []byte
 	cache            *cache.Cache
+
+	provenanceMode     provenance.Mode
+	provenanceBackends []provenance.Backend
 }
 
 // InstallResult holds the outcome of an install operation.
@@ -37,6 +41,9 @@ type InstallResult struct {
 	// Verified is true when the downloaded asset's checksum was verified
 	// against the release's checksums file.
 	Verified bool
+	// Provenance lists the verification backends (e.g. "cosign", "slsa")
+	// that positively verified the downloaded asset.
+	Provenance []string
 }
 
 // InstallOpts provides extended options for tool installation.
@@ -86,6 +93,21 @@ func (inst *Installer) SetDownloadCache(enabled bool) {
 		return
 	}
 	inst.cache = nil
+}
+
+// SetProvenanceVerification configures the optional post-download
+// provenance backends (cosign keyless signatures, SLSA attestations).
+// ModeOff (the default) disables them entirely.
+func (inst *Installer) SetProvenanceVerification(mode provenance.Mode, identity provenance.CosignIdentity) {
+	inst.provenanceMode = mode
+	if mode == provenance.ModeOff {
+		inst.provenanceBackends = nil
+		return
+	}
+	inst.provenanceBackends = []provenance.Backend{
+		provenance.NewCosign(identity),
+		provenance.NewSLSA(),
+	}
 }
 
 // Install downloads and installs a tool binary from GitHub Releases.
@@ -141,7 +163,7 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 
 	// Fetch + verify (fail-closed: any checksum failure is an error unless --skip-verify)
 	archivePath := filepath.Join(tmpDir, asset.Name)
-	verified, err := inst.fetchVerifiedAsset(ctx, release, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, false)
+	outcome, err := inst.fetchVerifiedAsset(ctx, release, repo, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, false)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +226,7 @@ func (inst *Installer) Install(ctx context.Context, toolName string, repo string
 
 	output.Debugf("Installed %s %s to %s", toolName, version, binaryPath)
 
-	return newInstallResult(version, binaryPath, verified), nil
+	return newInstallResult(version, binaryPath, outcome), nil
 }
 
 // InstallWithOpts downloads and installs a tool binary with extended options.
@@ -274,7 +296,7 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 
 	// Fetch + verify (BestEffort softens missing checksums to warnings)
 	archivePath := filepath.Join(tmpDir, asset.Name)
-	verified, err := inst.fetchVerifiedAsset(ctx, release, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, opts.BestEffort)
+	outcome, err := inst.fetchVerifiedAsset(ctx, release, repo, asset.Name, asset.BrowserDownloadURL, toolName, archivePath, skipVerify, opts.BestEffort)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +312,7 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 
 	// Handle raw binaries (no archive extraction needed)
 	if github.IsRawBinary(asset.Name) {
-		return inst.installRawBinary(archivePath, binaryPath, effectiveBinName, version, verified)
+		return inst.installRawBinary(archivePath, binaryPath, effectiveBinName, version, outcome)
 	}
 
 	// Extract archive
@@ -340,13 +362,21 @@ func (inst *Installer) InstallWithOpts(ctx context.Context, toolName string, rep
 
 	output.Debugf("Installed %s %s to %s", effectiveBinName, version, binaryPath)
 
-	return newInstallResult(version, binaryPath, verified), nil
+	return newInstallResult(version, binaryPath, outcome), nil
+}
+
+// fetchOutcome reports what verification actually happened for a fetched
+// asset: whether the checksum matched the release checksums file, and which
+// provenance backends (if any) verified it.
+type fetchOutcome struct {
+	checksumVerified bool
+	provenance       []string
 }
 
 // newInstallResult builds an InstallResult, recording the SHA-256 of the
 // installed binary so state can later detect out-of-band modification.
 // Hashing failure is not fatal — the install itself already succeeded.
-func newInstallResult(version, binaryPath string, verified bool) *InstallResult {
+func newInstallResult(version, binaryPath string, outcome fetchOutcome) *InstallResult {
 	sha, err := FileSHA256(binaryPath)
 	if err != nil {
 		output.Debugf("Could not hash installed binary %s: %v", binaryPath, err)
@@ -356,7 +386,8 @@ func newInstallResult(version, binaryPath string, verified bool) *InstallResult 
 		Version:    version,
 		BinaryPath: binaryPath,
 		Sha256:     sha,
-		Verified:   verified,
+		Verified:   outcome.checksumVerified,
+		Provenance: outcome.provenance,
 	}
 }
 
@@ -368,11 +399,11 @@ func newInstallResult(version, binaryPath string, verified bool) *InstallResult 
 // bestEffort softens missing-checksum conditions (no checksums file, no
 // entry for this asset) to warnings. A checksum that is present but fails
 // to match is always fatal, and unverified assets are never cached.
-// It reports whether checksum verification was actually performed.
-func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.Release, assetName, downloadURL, toolName, destPath string, skipVerify, bestEffort bool) (bool, error) {
+// It reports which verification actually happened via fetchOutcome.
+func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.Release, repo, assetName, downloadURL, toolName, destPath string, skipVerify, bestEffort bool) (fetchOutcome, error) {
 	expectedHash, err := inst.resolveExpectedHash(ctx, release, assetName, toolName, skipVerify, bestEffort)
 	if err != nil {
-		return false, err
+		return fetchOutcome{}, err
 	}
 
 	fromCache := false
@@ -388,13 +419,13 @@ func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.R
 
 	if !fromCache {
 		if err := inst.github.DownloadAsset(ctx, downloadURL, destPath); err != nil {
-			return false, errors.Wrap(err, "downloading %s", assetName)
+			return fetchOutcome{}, errors.Wrap(err, "downloading %s", assetName)
 		}
 	}
 
 	if expectedHash != "" {
 		if err := VerifyChecksum(destPath, expectedHash); err != nil {
-			return false, errors.Wrap(err, "checksum verification failed for %s", toolName)
+			return fetchOutcome{}, errors.Wrap(err, "checksum verification failed for %s", toolName)
 		}
 		output.Debugf("Checksum verified for %s", assetName)
 
@@ -409,13 +440,59 @@ func (inst *Installer) fetchVerifiedAsset(ctx context.Context, release *github.R
 	// Signature verification (when public key is configured)
 	if len(inst.signaturePubKey) > 0 {
 		if err := DownloadAndVerifySignature(ctx, inst.github, release, assetName, destPath, inst.signaturePubKey, inst.requireSignature); err != nil {
-			return false, errors.Wrap(err, "signature verification failed for %s", toolName)
+			return fetchOutcome{}, errors.Wrap(err, "signature verification failed for %s", toolName)
 		}
 	} else if inst.requireSignature {
-		return false, errors.New("signature required but no public key configured (set signature_public_key in config)")
+		return fetchOutcome{}, errors.New("signature required but no public key configured (set signature_public_key in config)")
 	}
 
-	return expectedHash != "", nil
+	// Optional provenance backends (cosign, slsa) run last, over the same
+	// bytes the checksum covered.
+	verifiedBy, err := inst.VerifyProvenance(ctx, release, repo, assetName, destPath, skipVerify)
+	if err != nil {
+		return fetchOutcome{}, err
+	}
+
+	return fetchOutcome{checksumVerified: expectedHash != "", provenance: verifiedBy}, nil
+}
+
+// VerifyProvenance runs the configured provenance backends against a fetched
+// asset and returns the names of backends that verified it. --skip-verify
+// skips backends in auto mode but is rejected under require, mirroring how
+// require_signature treats it. It is exported for direct (non-registry)
+// installs, which manage their own download and checksum flow.
+func (inst *Installer) VerifyProvenance(ctx context.Context, release *github.Release, repo, assetName, assetPath string, skipVerify bool) ([]string, error) {
+	if inst.provenanceMode == provenance.ModeOff || inst.provenanceMode == "" {
+		return nil, nil
+	}
+
+	if skipVerify {
+		if inst.provenanceMode == provenance.ModeRequire {
+			return nil, errors.New("--skip-verify cannot be used while provenance_verify is \"require\"")
+		}
+		output.Warning("Skipping provenance verification (--skip-verify)")
+		return nil, nil
+	}
+
+	assets := make([]provenance.Asset, 0, len(release.Assets))
+	for _, a := range release.Assets {
+		assets = append(assets, provenance.Asset{Name: a.Name, URL: a.BrowserDownloadURL})
+	}
+
+	results, err := provenance.Run(ctx, inst.provenanceMode, inst.provenanceBackends, provenance.Request{
+		Repo:      repo,
+		Tag:       release.TagName,
+		AssetName: assetName,
+		AssetPath: assetPath,
+		Assets:    assets,
+		WorkDir:   filepath.Dir(assetPath),
+		Download:  inst.github.DownloadAsset,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return provenance.VerifiedBackends(results), nil
 }
 
 // resolveExpectedHash fetches the release checksums file and returns the
@@ -457,7 +534,7 @@ func (inst *Installer) resolveExpectedHash(ctx context.Context, release *github.
 }
 
 // installRawBinary handles installing a raw binary (not an archive).
-func (*Installer) installRawBinary(srcPath, binaryPath, binName, version string, verified bool) (*InstallResult, error) {
+func (*Installer) installRawBinary(srcPath, binaryPath, binName, version string, outcome fetchOutcome) (*InstallResult, error) {
 	tempPath := binaryPath + ".tmp"
 	if err := copyFile(srcPath, tempPath); err != nil {
 		os.Remove(tempPath)
@@ -476,7 +553,7 @@ func (*Installer) installRawBinary(srcPath, binaryPath, binName, version string,
 
 	output.Debugf("Installed raw binary %s %s to %s", binName, version, binaryPath)
 
-	return newInstallResult(version, binaryPath, verified), nil
+	return newInstallResult(version, binaryPath, outcome), nil
 }
 
 // InstallFromArchive installs a tool from a local archive file (offline/air-gapped install).
@@ -545,7 +622,7 @@ func (inst *Installer) InstallFromArchive(toolName string, archivePath string) (
 
 	output.Debugf("Installed %s %s from archive to %s", toolName, version, binaryPath)
 
-	return newInstallResult(version, binaryPath, false), nil
+	return newInstallResult(version, binaryPath, fetchOutcome{}), nil
 }
 
 // parseVersionFromFilename tries to extract a semver-like version from a filename.

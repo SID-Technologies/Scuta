@@ -29,6 +29,9 @@ type ToolState struct {
 	// checksums actually happened for this install. Only meaningful when
 	// Sha256 is set.
 	Verified bool `json:"verified,omitempty"`
+	// Provenance lists the verification backends (e.g. "cosign", "slsa")
+	// that positively verified the release asset at install time.
+	Provenance []string `json:"provenance,omitempty"`
 }
 
 // CurrentStateVersion is the current state file format version.

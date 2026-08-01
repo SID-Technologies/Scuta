@@ -228,3 +228,30 @@ func TestIsExecutable_WindowsHasNoExecBits(t *testing.T) {
 		t.Fatal("expected executable=false for 0o644 on POSIX")
 	}
 }
+
+func TestAuditTool_ProvenanceSurfacedInReport(t *testing.T) {
+	dir := t.TempDir()
+	bin, sha := writeBinary(t, dir, "tool", "#!/bin/sh\n")
+
+	st := state.NewState()
+	st.SetTool("tool", state.ToolState{
+		Version:    "1.0.0",
+		BinaryPath: bin,
+		Sha256:     sha,
+		Verified:   true,
+		Provenance: []string{"cosign"},
+	})
+
+	tools := CheckTools(st, nil)
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	if len(tools[0].Provenance) != 1 || tools[0].Provenance[0] != "cosign" {
+		t.Fatalf("Provenance = %v, want [cosign]", tools[0].Provenance)
+	}
+	for _, f := range tools[0].Findings {
+		if f.Severity == SeverityCritical {
+			t.Fatalf("unexpected critical finding: %+v", f)
+		}
+	}
+}

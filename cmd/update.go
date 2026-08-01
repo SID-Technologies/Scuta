@@ -181,6 +181,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		inst = installer.New(ghClient, scutaDir)
 	}
 	applyDownloadCacheConfig(inst, scutaDir)
+	applyProvenanceConfig(inst, scutaDir)
 	pol := loadPolicy(scutaDir)
 	start := time.Now()
 	var toolResults []history.ToolResult
@@ -252,6 +253,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			Repo:        st.Tools[u.Name].Repo,
 			Sha256:      result.Sha256,
 			Verified:    result.Verified,
+			Provenance:  result.Provenance,
 		})
 
 		output.Success("Updated %s %s → %s", u.Name, u.CurrentVersion, result.Version)

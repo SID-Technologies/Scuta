@@ -125,6 +125,7 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	ghClient := newGitHubClient(token, scutaDir)
 	inst := installer.New(ghClient, scutaDir)
 	applyDownloadCacheConfig(inst, scutaDir)
+	applyProvenanceConfig(inst, scutaDir)
 
 	output.Info("Rolling back %s %s → %s...", toolName, ts.Version, prevVersion)
 
@@ -166,6 +167,7 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		Repo:        ts.Repo,
 		Sha256:      result.Sha256,
 		Verified:    result.Verified,
+		Provenance:  result.Provenance,
 	})
 	if err := st.Save(scutaDir); err != nil {
 		output.Error("Failed to save state: %v", err)

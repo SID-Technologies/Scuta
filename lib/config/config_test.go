@@ -233,3 +233,32 @@ func TestUpdateIntervalDuration(t *testing.T) {
 		t.Errorf("expected fallback 24h, got %v", d2)
 	}
 }
+
+func TestProvenanceConfigKeys(t *testing.T) {
+	var c Config
+
+	if err := c.SetField("provenance_verify", "auto"); err != nil {
+		t.Fatalf("SetField provenance_verify: %v", err)
+	}
+	if err := c.SetField("cosign_identity_regexp", "^https://example.com/"); err != nil {
+		t.Fatalf("SetField cosign_identity_regexp: %v", err)
+	}
+	if err := c.SetField("cosign_oidc_issuer", "https://issuer.example"); err != nil {
+		t.Fatalf("SetField cosign_oidc_issuer: %v", err)
+	}
+
+	fields := c.FieldMap()
+	if fields["provenance_verify"] != "auto" {
+		t.Errorf("FieldMap provenance_verify = %q, want auto", fields["provenance_verify"])
+	}
+	if fields["cosign_identity_regexp"] != "^https://example.com/" {
+		t.Errorf("FieldMap cosign_identity_regexp = %q", fields["cosign_identity_regexp"])
+	}
+
+	if got := DefaultValue("provenance_verify"); got != "off" {
+		t.Errorf("DefaultValue(provenance_verify) = %q, want off", got)
+	}
+	if got := (Config{}).FieldMap()["provenance_verify"]; got != "off" {
+		t.Errorf("zero-value FieldMap provenance_verify = %q, want off", got)
+	}
+}

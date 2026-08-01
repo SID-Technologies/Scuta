@@ -5,6 +5,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/github"
 	"github.com/sid-technologies/scuta/lib/installer"
 	"github.com/sid-technologies/scuta/lib/output"
+	"github.com/sid-technologies/scuta/lib/provenance"
 )
 
 // newGitHubClient creates a GitHub client with token and optional base URL from config.
@@ -32,4 +33,29 @@ func applyDownloadCacheConfig(inst *installer.Installer, scutaDir string) {
 		inst.SetDownloadCache(false)
 		output.Debugf("Download cache disabled via config")
 	}
+}
+
+// applyProvenanceConfig wires the optional provenance backends (cosign,
+// slsa-verifier) onto the installer according to the provenance_verify
+// config key. Off by default; a bad value is warned about, not fatal.
+func applyProvenanceConfig(inst *installer.Installer, scutaDir string) {
+	cfg, err := config.LoadWithMerge(scutaDir)
+	if err != nil {
+		return
+	}
+
+	mode, err := provenance.ParseMode(cfg.ProvenanceVerify)
+	if err != nil {
+		output.Warning("Ignoring provenance_verify: %v", err)
+		return
+	}
+	if mode == provenance.ModeOff {
+		return
+	}
+
+	inst.SetProvenanceVerification(mode, provenance.CosignIdentity{
+		IdentityRegexp: cfg.CosignIdentityRegexp,
+		OIDCIssuer:     cfg.CosignOIDCIssuer,
+	})
+	output.Debugf("Provenance verification enabled (mode=%s)", mode)
 }

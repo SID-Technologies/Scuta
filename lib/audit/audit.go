@@ -60,6 +60,7 @@ type Tool struct {
 	Present       bool      `json:"present"`
 	Executable    bool      `json:"executable"`
 	Verified      bool      `json:"verified"`
+	Provenance    []string  `json:"provenance,omitempty"`
 	Sha256        string    `json:"sha256,omitempty"`
 	CurrentSha256 string    `json:"current_sha256,omitempty"`
 	Drift         bool      `json:"drift"`
@@ -184,6 +185,7 @@ func auditTool(name string, ts state.ToolState, pol *policy.Policy) Tool {
 		BinaryPath:  ts.BinaryPath,
 		InstalledAt: ts.InstalledAt,
 		Verified:    ts.Verified,
+		Provenance:  ts.Provenance,
 		Sha256:      ts.Sha256,
 	}
 

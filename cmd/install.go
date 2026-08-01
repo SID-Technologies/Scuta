@@ -177,6 +177,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		inst.SetSignatureVerification(cfg.RequireSignature, []byte(cfg.SignaturePublicKey))
 	}
 	applyDownloadCacheConfig(inst, scutaDir)
+	applyProvenanceConfig(inst, scutaDir)
 
 	start := time.Now()
 
@@ -455,6 +456,7 @@ func installOneTool(
 		BinaryPath:  result.BinaryPath,
 		Sha256:      result.Sha256,
 		Verified:    result.Verified,
+		Provenance:  result.Provenance,
 	})
 
 	output.Success("Installed %s %s", toolName, result.Version)
@@ -622,6 +624,7 @@ func runInstallFromArchive(ctx context.Context, args []string, archivePath strin
 		BinaryPath:  result.BinaryPath,
 		Sha256:      result.Sha256,
 		Verified:    result.Verified,
+		Provenance:  result.Provenance,
 	})
 
 	if err := st.Save(scutaDir); err != nil {
@@ -694,6 +697,7 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 		inst = installer.New(ghClient, scutaDir)
 	}
 	applyDownloadCacheConfig(inst, scutaDir)
+	applyProvenanceConfig(inst, scutaDir)
 
 	// Check if already installed (skip unless force)
 	if !forceFlag && versionFlag == "" {
@@ -762,6 +766,13 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 		}
 	}
 
+	// Optional provenance backends (cosign, slsa) — same gate as registry
+	// installs, over the exact bytes just verified.
+	provenanceBackends, provErr := inst.VerifyProvenance(ctx, release, repo, asset.Name, archivePath, skipVerifyFlag)
+	if provErr != nil {
+		return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("provenance verification failed for %s: %v", toolName, provErr))
+	}
+
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -815,6 +826,7 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 		Repo:        repo,
 		Sha256:      binarySha,
 		Verified:    checksumVerified,
+		Provenance:  provenanceBackends,
 	})
 
 	if err := st.Save(stateDir); err != nil {

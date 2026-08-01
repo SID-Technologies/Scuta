@@ -1,8 +1,11 @@
 # Scuta
 
-SID Developer Toolbox. Install once, get everything.
+Security-first CLI tool installer. If it can't be verified, it doesn't get installed.
 
-Scuta manages SID's developer CLI tools — installing, updating, and discovering them from a single command.
+Scuta installs, updates, and pins CLI tools from GitHub releases with fail-closed
+verification at every step: SHA256 checksums by default, plus opt-in signature
+verification, cosign/SLSA provenance, signed registries and org policies, tamper
+detection, and signed air-gapped bundles for offline environments.
 
 > **Bring your own tools.** The bundled registry is intentionally tiny — Scuta is
 > built to point at *your* catalog, whether that's a per-machine local registry
@@ -40,7 +43,7 @@ make build
 # Set up Scuta on your machine (interactive setup)
 scuta init
 
-# Install all SID tools
+# Install every tool in your registry
 scuta install --all
 
 # Check what's available
@@ -49,12 +52,6 @@ scuta list
 # Update everything
 scuta update
 ```
-
-## Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `pilum` | Multi-cloud deployment CLI |
 
 ## Commands
 
@@ -281,7 +278,7 @@ During `scuta init` you can pick a mode up front:
 
 | Mode | Description |
 |------|-------------|
-| **Public** (default) | Uses the official SID registry — no auth needed |
+| **Public** (default) | Uses the built-in starter registry — no auth needed |
 | **Private** | Uses a private GitHub-hosted registry (requires token) |
 | **Local only** | No remote registry — manage tools manually via `scuta registry add` |
 

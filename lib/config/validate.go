@@ -35,6 +35,12 @@ func ValidateValue(key, value string) error {
 		if !valid[strings.ToLower(value)] {
 			return errors.New("invalid value for %s: %q (use true/false)", key, value)
 		}
+	case "provenance_verify":
+		switch strings.ToLower(value) {
+		case "", "off", "auto", "require":
+		default:
+			return errors.New("invalid value for %s: %q (use off, auto, or require)", key, value)
+		}
 	case "audit_log_destination":
 		if value == "" || value == "stdout" || value == "syslog" {
 			break

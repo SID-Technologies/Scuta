@@ -141,7 +141,7 @@ fall back to best-effort when a release ships no checksums file.
 | `scuta config set <key> <value>` | Set a config value (local config only) |
 | `scuta config reset <key>` | Reset a config value to its default |
 
-Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`, `config_url`, `telemetry`, `require_signature`, `require_signed_metadata`, `signature_public_key`, `audit_log_destination`, `disable_download_cache`
+Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`, `config_url`, `telemetry`, `require_signature`, `require_signed_metadata`, `signature_public_key`, `audit_log_destination`, `disable_download_cache`, `provenance_verify`, `cosign_identity_regexp`, `cosign_oidc_issuer`
 
 ### Registry
 
@@ -207,6 +207,7 @@ Scuta verifies every download:
 - **Signature verification** (opt-in): Enable with `scuta config set require_signature true` and provide a PEM public key via `scuta config set signature_public_key <pem>`. Supports RSA, ECDSA, and Ed25519. When enabled, installs fail if no `.sig` file is found.
 - **Signed metadata** (opt-in): remote registry, policy, and org config fetches are verified against a detached `.sig` file using the same `signature_public_key` trust root. Enable fail-closed mode with `scuta config set require_signed_metadata true`. Operators sign with `scuta admin keygen` / `scuta admin sign` — see [docs/REGISTRY.md](docs/REGISTRY.md#signing-your-registry).
 - **Signed bundles**: `scuta bundle create --sign <key>` signs the bundle manifest (which pins every asset by SHA-256, across all platforms in the bundle). `bundle verify` and `bundle install` check the signature against the `signature_public_key` trust root; an invalid signature is always fatal, and `require_signature true` makes unsigned bundles fail closed (and blocks `--skip-verify` — the policy is authoritative). Asset checksums are verified on every install either way.
+- **Provenance verification** (opt-in): cosign keyless signatures and SLSA build provenance are checked via the `cosign` / `slsa-verifier` CLIs when present on PATH. Enable with `scuta config set provenance_verify auto` (verify when a release ships sigstore bundles, `.sig`+`.pem` pairs, a cosign-signed `checksums.txt`, or `*.intoto.jsonl` attestations; skip quietly otherwise) or `require` (fail unless at least one backend verifies). Present-but-invalid material is always fatal, in any mode. The expected signer identity defaults to the release repository's GitHub Actions workflows; pin it explicitly with `cosign_identity_regexp` / `cosign_oidc_issuer` (local/system config only — never honored from remote config, and remote config can strengthen but never weaken the mode). Verified backends are recorded in state and surfaced by `scuta doctor --audit`.
 - **Policy enforcement**: Organizations can enforce version constraints via a remote `policy_url` — allowed/blocked versions, minimum Scuta version.
 - **Download cache**: verified assets are cached content-addressed by SHA-256 under `~/.scuta/cache`, so repeat installs skip the network without weakening verification — only checksum-verified assets are ever cached, and entries are re-hashed on every hit. Inspect with `scuta cache info`; disable with `scuta config set disable_download_cache true`.
 

@@ -8,6 +8,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/errors"
 	"github.com/sid-technologies/scuta/lib/fetch"
 	"github.com/sid-technologies/scuta/lib/output"
+	"github.com/sid-technologies/scuta/lib/provenance"
 
 	"gopkg.in/yaml.v3"
 )
@@ -187,6 +188,15 @@ func mergeConfig(dst *Config, src Config) {
 	if src.DisableDownloadCache {
 		dst.DisableDownloadCache = true
 	}
+	if src.ProvenanceVerify != "" {
+		dst.ProvenanceVerify = src.ProvenanceVerify
+	}
+	if src.CosignIdentityRegexp != "" {
+		dst.CosignIdentityRegexp = src.CosignIdentityRegexp
+	}
+	if src.CosignOIDCIssuer != "" {
+		dst.CosignOIDCIssuer = src.CosignOIDCIssuer
+	}
 }
 
 // mergeRemoteConfig applies a remotely fetched config onto dst. It is
@@ -199,5 +209,21 @@ func mergeRemoteConfig(dst *Config, src Config) {
 		output.Warning("Ignoring signature_public_key from remote config — the trust root must be set locally")
 		src.SignaturePublicKey = ""
 	}
+
+	// The cosign identity constraints are trust-root-like: whoever sets
+	// them decides which signer counts as valid. Remote config must not.
+	if src.CosignIdentityRegexp != "" || src.CosignOIDCIssuer != "" {
+		output.Warning("Ignoring cosign identity settings from remote config — signer identity must be set locally")
+		src.CosignIdentityRegexp = ""
+		src.CosignOIDCIssuer = ""
+	}
+
+	// A remote config may strengthen provenance verification but never
+	// weaken a locally configured mode (off < auto < require).
+	if src.ProvenanceVerify != "" && provenance.Rank(src.ProvenanceVerify) < provenance.Rank(dst.ProvenanceVerify) {
+		output.Warning("Ignoring provenance_verify=%q from remote config — weaker than local setting", src.ProvenanceVerify)
+		src.ProvenanceVerify = ""
+	}
+
 	mergeConfig(dst, src)
 }

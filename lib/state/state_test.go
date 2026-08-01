@@ -223,3 +223,31 @@ func TestRemoveTool(t *testing.T) {
 		t.Error("expected api-gen to still exist")
 	}
 }
+
+func TestToolStateProvenanceRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	st := NewState()
+	st.SetTool("tool", ToolState{
+		Version:    "1.0.0",
+		BinaryPath: "/bin/tool",
+		Sha256:     "abc",
+		Verified:   true,
+		Provenance: []string{"cosign", "slsa"},
+	})
+	if err := st.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ts, ok := loaded.GetTool("tool")
+	if !ok {
+		t.Fatal("tool missing after reload")
+	}
+	if len(ts.Provenance) != 2 || ts.Provenance[0] != "cosign" || ts.Provenance[1] != "slsa" {
+		t.Fatalf("Provenance = %v, want [cosign slsa]", ts.Provenance)
+	}
+}

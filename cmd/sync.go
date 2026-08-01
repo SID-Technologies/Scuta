@@ -152,6 +152,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	ghClient := newGitHubClient(token, scutaDir)
 	inst := installer.New(ghClient, scutaDir)
 	applyDownloadCacheConfig(inst, scutaDir)
+	applyProvenanceConfig(inst, scutaDir)
 	pol := loadPolicy(scutaDir)
 
 	start := time.Now()
@@ -319,6 +320,7 @@ func applySyncAction(
 		Repo:        repo,
 		Sha256:      result.Sha256,
 		Verified:    result.Verified,
+		Provenance:  result.Provenance,
 	})
 	res.Version = result.Version
 	res.Success = true

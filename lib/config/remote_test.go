@@ -475,3 +475,32 @@ func TestFetchRemoteInvalidYAMLFails(t *testing.T) {
 		t.Fatal("expected parse error for invalid YAML")
 	}
 }
+
+func TestMergeRemoteConfigProvenanceHardening(t *testing.T) {
+	// Remote must not weaken a locally configured mode.
+	dst := Config{ProvenanceVerify: "require"}
+	mergeRemoteConfig(&dst, Config{ProvenanceVerify: "off"})
+	if dst.ProvenanceVerify != "require" {
+		t.Errorf("remote weakened provenance_verify to %q", dst.ProvenanceVerify)
+	}
+
+	// Remote may strengthen it.
+	dst = Config{ProvenanceVerify: "auto"}
+	mergeRemoteConfig(&dst, Config{ProvenanceVerify: "require"})
+	if dst.ProvenanceVerify != "require" {
+		t.Errorf("remote strengthening ignored, got %q", dst.ProvenanceVerify)
+	}
+
+	// Cosign identity settings are trust-root-like: never from remote.
+	dst = Config{CosignIdentityRegexp: "^https://github.com/myorg/"}
+	mergeRemoteConfig(&dst, Config{
+		CosignIdentityRegexp: "^https://evil.example/",
+		CosignOIDCIssuer:     "https://evil-issuer.example",
+	})
+	if dst.CosignIdentityRegexp != "^https://github.com/myorg/" {
+		t.Errorf("remote overrode cosign_identity_regexp: %q", dst.CosignIdentityRegexp)
+	}
+	if dst.CosignOIDCIssuer != "" {
+		t.Errorf("remote set cosign_oidc_issuer: %q", dst.CosignOIDCIssuer)
+	}
+}

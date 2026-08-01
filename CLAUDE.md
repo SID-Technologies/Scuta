@@ -28,7 +28,7 @@ A unified CLI that manages SID's developer tools. Engineers install Scuta once, 
 
 - Scuta is purely a **tool manager** — no domain tool code lives here
 - **Registry** is a YAML manifest (go:embed + remote fetch from GitHub)
-- **Tools** live in their own repos (api-gen, pilum, mcp-gen, etc.)
+- **Tools** live in their own repos (pilum, and others as they ship)
 - **State** lives in `~/.scuta/` (config, installed versions, update timestamps)
 
 ## Development Guidelines

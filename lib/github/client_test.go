@@ -1,8 +1,13 @@
 package github
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/sid-technologies/scuta/lib/errors"
 )
 
 func TestNormalizeVersion(t *testing.T) {
@@ -226,5 +231,85 @@ func TestValidateJSONContentType(t *testing.T) {
 				t.Errorf("validateJSONContentType(%q) error = %v, wantErr %v", tt.contentType, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestGetReleaseTolerant_FallbackToUnprefixed(t *testing.T) {
+	// Server only knows the unprefixed tag "14.1.0"; the prefixed "v14.1.0" 404s.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/owner/tool/releases/tags/14.1.0" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"tag_name":"14.1.0","assets":[]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := NewClient("")
+	client.SetBaseURL(srv.URL)
+
+	release, err := client.GetReleaseTolerant(context.Background(), "owner/tool", "v14.1.0")
+	if err != nil {
+		t.Fatalf("expected fallback to succeed, got error: %v", err)
+	}
+	if release.TagName != "14.1.0" {
+		t.Errorf("expected tag_name 14.1.0, got %q", release.TagName)
+	}
+}
+
+func TestGetReleaseTolerant_FallbackToPrefixed(t *testing.T) {
+	// Server only knows the prefixed tag "v1.2.3".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/owner/tool/releases/tags/v1.2.3" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"tag_name":"v1.2.3","assets":[]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := NewClient("")
+	client.SetBaseURL(srv.URL)
+
+	release, err := client.GetReleaseTolerant(context.Background(), "owner/tool", "1.2.3")
+	if err != nil {
+		t.Fatalf("expected fallback to succeed, got error: %v", err)
+	}
+	if release.TagName != "v1.2.3" {
+		t.Errorf("expected tag_name v1.2.3, got %q", release.TagName)
+	}
+}
+
+func TestGetReleaseTolerant_NotFoundBothForms(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := NewClient("")
+	client.SetBaseURL(srv.URL)
+
+	_, err := client.GetReleaseTolerant(context.Background(), "owner/tool", "v9.9.9")
+	if err == nil {
+		t.Fatal("expected error when neither tag form exists")
+	}
+	if !errors.Is(err, ErrReleaseNotFound) {
+		t.Errorf("expected ErrReleaseNotFound, got: %v", err)
+	}
+	// The error should name both tag forms tried, not just the toggled one.
+	msg := err.Error()
+	if !strings.Contains(msg, "v9.9.9") || !strings.Contains(msg, "9.9.9") {
+		t.Errorf("expected error to mention both v9.9.9 and 9.9.9, got: %s", msg)
+	}
+}
+
+func TestToggleVPrefix(t *testing.T) {
+	if got := toggleVPrefix("1.2.3"); got != "v1.2.3" {
+		t.Errorf("toggleVPrefix(1.2.3) = %q, want v1.2.3", got)
+	}
+	if got := toggleVPrefix("v1.2.3"); got != "1.2.3" {
+		t.Errorf("toggleVPrefix(v1.2.3) = %q, want 1.2.3", got)
 	}
 }

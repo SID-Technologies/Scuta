@@ -31,7 +31,7 @@ type templateData struct {
 // Otherwise, it falls back to the standard GoReleaser pattern matching via FindAsset.
 func ResolveAsset(assets []Asset, goos, goarch string, opts AssetOptions) (*Asset, error) {
 	if opts.Template == "" {
-		return FindAsset(assets, goos, goarch)
+		return FindAssetHeuristic(assets, goos, goarch)
 	}
 
 	resolvedOS := resolveMapping(goos, opts.OSMap)
@@ -99,7 +99,7 @@ func FindAssetHeuristic(assets []Asset, goos, goarch string) (*Asset, error) {
 		if !isArchive(name) {
 			continue
 		}
-		if containsAny(name, osAliases) && containsAny(name, archAliases) {
+		if containsAnyToken(name, osAliases) && containsAnyToken(name, archAliases) {
 			return &assets[i], nil
 		}
 	}
@@ -111,7 +111,7 @@ func FindAssetHeuristic(assets []Asset, goos, goarch string) (*Asset, error) {
 		if !isArchive(name) {
 			continue
 		}
-		if containsAny(name, osAliases) {
+		if containsAnyToken(name, osAliases) {
 			osMatches = append(osMatches, &assets[i])
 		}
 	}
@@ -183,14 +183,44 @@ func archAliasesFor(arch string) []string {
 	}
 }
 
-// containsAny returns true if s contains any of the substrings.
-func containsAny(s string, substrings []string) bool {
-	for _, sub := range substrings {
-		if strings.Contains(s, sub) {
+// containsAnyToken returns true if s contains any of the tokens
+// (delimited, per containsToken).
+func containsAnyToken(s string, tokens []string) bool {
+	for _, tok := range tokens {
+		if containsToken(s, tok) {
 			return true
 		}
 	}
 	return false
+}
+
+// containsToken reports whether s contains token delimited by
+// non-alphanumeric characters or string boundaries. This prevents short
+// aliases from matching inside longer words — e.g. the windows alias
+// "win" must not match "darwin".
+func containsToken(s, token string) bool {
+	if token == "" {
+		return false
+	}
+	for start := 0; ; {
+		idx := strings.Index(s[start:], token)
+		if idx < 0 {
+			return false
+		}
+		pos := start + idx
+		end := pos + len(token)
+		beforeOK := pos == 0 || !isAlphanumeric(s[pos-1])
+		afterOK := end == len(s) || !isAlphanumeric(s[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		start = pos + 1
+	}
+}
+
+// isAlphanumeric reports whether c is an ASCII letter or digit.
+func isAlphanumeric(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // newNoAssetError builds a consistent error for when no asset is found.

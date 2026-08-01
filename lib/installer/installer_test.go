@@ -522,3 +522,133 @@ func TestValidateToolName(t *testing.T) {
 		})
 	}
 }
+
+func TestFindBinarySingleExecutableFallback(t *testing.T) {
+	// Repo "ripgrep" ships a binary named "rg" alongside non-binary files.
+	// Name/prefix matching fails, so the single-executable fallback should pick
+	// the binary. Executables are exec-bit files on Unix and .exe on Windows.
+	tmpDir := t.TempDir()
+
+	binName := "rg"
+	if runtime.GOOS == "windows" {
+		binName = "rg.exe"
+	}
+
+	if err := os.WriteFile(filepath.Join(tmpDir, binName), []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("docs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "rg.fish"), []byte("completions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := findBinary(tmpDir, "ripgrep")
+	if err != nil {
+		t.Fatalf("expected single-executable fallback to succeed, got %v", err)
+	}
+	if filepath.Base(found) != binName {
+		t.Fatalf("expected to find %s, got %s", binName, found)
+	}
+}
+
+func TestFindBinaryAmbiguousExecutablesError(t *testing.T) {
+	// Two executables and no name match — the fallback must not guess.
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "foo"), []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "bar"), []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := findBinary(tmpDir, "nonexistent"); err == nil {
+		t.Error("expected error for ambiguous executables, got nil")
+	}
+}
+
+// TestFindBinaryIgnoresCompletionScripts reproduces the ripgrep archive layout,
+// where a shell-completion file "complete/rg.bash" would match the tool name
+// "rg" after stripping its extension. findBinary must skip it and return the
+// real executable at the archive root.
+func TestFindBinaryIgnoresCompletionScripts(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	completeDir := filepath.Join(tmpDir, "complete")
+	if err := os.MkdirAll(completeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(completeDir, "rg.bash"), []byte("_rg() {}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	realBin := filepath.Join(tmpDir, "rg")
+	if err := os.WriteFile(realBin, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := findBinary(tmpDir, "rg")
+	if err != nil {
+		t.Fatalf("findBinary failed: %v", err)
+	}
+	if found != realBin {
+		t.Errorf("expected real binary %q, got %q", realBin, found)
+	}
+}
+
+func TestUninstallBinaryPath_RemovesCustomBinName(t *testing.T) {
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inst := NewWithBinDir(nil, tmpDir, binDir)
+
+	// Install path recorded in state uses the custom bin name "rg".
+	binPath := filepath.Join(binDir, "rg")
+	if err := os.WriteFile(binPath, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := inst.UninstallBinaryPath(binPath); err != nil {
+		t.Fatalf("UninstallBinaryPath failed: %v", err)
+	}
+	if _, err := os.Stat(binPath); !os.IsNotExist(err) {
+		t.Errorf("expected %q to be removed, stat err = %v", binPath, err)
+	}
+}
+
+func TestUninstallBinaryPath_MissingFileIsNoError(t *testing.T) {
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inst := NewWithBinDir(nil, tmpDir, binDir)
+
+	if err := inst.UninstallBinaryPath(filepath.Join(binDir, "ghost")); err != nil {
+		t.Errorf("expected no error for missing file, got %v", err)
+	}
+}
+
+func TestUninstallBinaryPath_RejectsPathOutsideBinDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inst := NewWithBinDir(nil, tmpDir, binDir)
+
+	// A path outside the managed bin dir must be refused, not deleted.
+	outside := filepath.Join(tmpDir, "outside.txt")
+	if err := os.WriteFile(outside, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.UninstallBinaryPath(outside); err == nil {
+		t.Error("expected error for path outside bin dir, got nil")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("outside file must not be removed: %v", err)
+	}
+}

@@ -4,6 +4,13 @@ SID Developer Toolbox. Install once, get everything.
 
 Scuta manages SID's developer CLI tools — installing, updating, and discovering them from a single command.
 
+> **Bring your own tools.** The bundled registry is intentionally tiny — Scuta is
+> built to point at *your* catalog, whether that's a per-machine local registry
+> or a self-hosted one shared across your org. See
+> [**Run Your Own Registry**](#run-your-own-registry) below, or the full
+> [**docs/REGISTRY.md**](docs/REGISTRY.md) for the local vs. hosted setup and
+> manifest schema.
+
 ## Installation
 
 ### Homebrew (macOS/Linux)
@@ -47,9 +54,7 @@ scuta update
 
 | Tool | Description |
 |------|-------------|
-| `api-gen` | OpenAPI code generator (Go + TypeScript) |
 | `pilum` | Multi-cloud deployment CLI |
-| `mcp-gen` | Generate MCP servers from OpenAPI specs |
 
 ## Commands
 
@@ -58,6 +63,7 @@ scuta update
 | Command | Description |
 |---------|-------------|
 | `scuta init` | Setup ~/.scuta/, detect auth, configure PATH |
+| `scuta init --from <url> [--key <pub.pem>]` | Non-interactive bootstrap from an org config URL |
 | `scuta install <tool>` | Install a tool from the registry |
 | `scuta install <tool> --from <archive>` | Install from a local archive (offline) |
 | `scuta install --all` | Install all tools |
@@ -70,15 +76,60 @@ scuta update
 | `scuta info <tool>` | Show detailed information about a tool |
 | `scuta doctor` | Health check (PATH, binaries, state, CVEs) |
 | `scuta doctor --skip-cve` | Skip CVE check (for offline environments) |
+| `scuta doctor --audit` | Security audit: provenance, tamper detection, policy, posture |
+| `scuta doctor --audit --json` | Audit report as JSON (for CI / fleet aggregation) |
 | `scuta history` | Show install/update history |
+| `scuta rollback <tool>` | Reinstall the previous version from history |
+| `scuta sync` | Reconcile installed tools to a declarative manifest (scuta.lock.yaml) |
+| `scuta sync --dry-run` | Show the reconciliation plan without applying it |
+| `scuta sync --prune` | Also remove installed tools absent from the manifest |
+| `scuta sync --check` | Exit 8 if the machine has drifted from the manifest (CI gate) |
+| `scuta cache info` | Show download cache location, entry count, and size |
+| `scuta cache clear` | Remove all cached downloads |
 | `scuta self-update` | Update Scuta itself |
 | `scuta version` | Print version |
+
+### Declarative Sync
+
+Pin your whole toolset in a manifest and converge every machine to it. Commit
+`scuta.lock.yaml` to a repo, and every engineer runs `scuta sync`:
+
+```yaml
+# scuta.lock.yaml
+tools:
+  # Registry tool, pinned version (shorthand form):
+  pilum: "0.7.5"
+  # Arbitrary public repo whose binary name differs from the repo name:
+  ripgrep:
+    version: "14.1.0"
+    repo: "BurntSushi/ripgrep"
+    bin: "rg"
+  # Unpinned — installed only when missing, kept current by `scuta update`:
+  bat: "latest"
+```
+
+```bash
+scuta sync                 # converge to the manifest
+scuta sync --dry-run       # preview the plan
+scuta sync --prune         # also uninstall tools not listed
+scuta sync -f path/to.yaml # use a specific manifest
+scuta sync --check         # CI gate: exit 8 on drift, change nothing
+```
+
+Sync looks for `scuta.lock.yaml`, `scuta.lock.yml`, `scuta.yaml`, or
+`scuta.yml` in the current directory when `-f` is omitted. Pinned versions are
+fail-closed on checksum verification for registry-blessed tools; direct repos
+fall back to best-effort when a release ships no checksums file.
 
 ### Bundles (Offline / Air-gapped)
 
 | Command | Description |
 |---------|-------------|
 | `scuta bundle create [tool...]` | Create an offline bundle with tool archives |
+| `scuta bundle create --from-manifest <file>` | Bundle exactly what a `scuta.lock.yaml` pins |
+| `scuta bundle create --platforms <os/arch,...>` | Include builds for multiple target platforms |
+| `scuta bundle create --sign <key.pem>` | Embed a signed manifest in the bundle |
+| `scuta bundle verify <bundle> [--key <pub.pem>]` | Verify bundle signature and asset checksums |
 | `scuta bundle install <bundle>` | Install tools from an offline bundle |
 
 ### Configuration
@@ -90,7 +141,7 @@ scuta update
 | `scuta config set <key> <value>` | Set a config value (local config only) |
 | `scuta config reset <key>` | Reset a config value to its default |
 
-Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`, `config_url`, `telemetry`, `require_signature`, `signature_public_key`, `audit_log_destination`
+Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_base_url`, `policy_url`, `config_url`, `telemetry`, `require_signature`, `require_signed_metadata`, `signature_public_key`, `audit_log_destination`, `disable_download_cache`, `provenance_verify`, `cosign_identity_regexp`, `cosign_oidc_issuer`
 
 ### Registry
 
@@ -100,6 +151,14 @@ Valid config keys: `update_interval`, `github_token`, `registry_url`, `github_ba
 | `scuta registry list --all` | Show merged registry with source info |
 | `scuta registry add <name> --repo <owner/repo>` | Add a tool to the local registry |
 | `scuta registry remove <name>` | Remove a tool from the local registry |
+
+### Admin (registry operators)
+
+| Command | Description |
+|---------|-------------|
+| `scuta admin keygen` | Generate an Ed25519 signing key pair |
+| `scuta admin sign <file> --key <key>` | Create a detached signature (`<file>.sig`) |
+| `scuta admin verify <file>` | Verify a file against its detached signature |
 
 ### Shell Completions
 
@@ -127,9 +186,13 @@ For environments without internet access, use bundles to transport tools:
 
 ```bash
 # On a connected machine: create a bundle
-scuta bundle create pilum api-gen
+scuta bundle create pilum
+
+# Bundle exactly what your manifest pins, for multiple platforms, signed:
+scuta bundle create --from-manifest scuta.lock.yaml    --platforms darwin/arm64,linux/amd64 --sign scuta-signing.key
 
 # Transfer the .tar.gz bundle to the air-gapped machine, then:
+scuta bundle verify ./scuta-bundle-20260319.tar.gz --key scuta-signing.pub
 scuta bundle install ./scuta-bundle-20260319.tar.gz
 
 # Or install a single tool from a local archive:
@@ -142,7 +205,11 @@ Scuta verifies every download:
 
 - **Checksum verification** (default): SHA256 checksums are verified against the release's `checksums.txt`. Fails if checksums are missing (use `--skip-verify` to override).
 - **Signature verification** (opt-in): Enable with `scuta config set require_signature true` and provide a PEM public key via `scuta config set signature_public_key <pem>`. Supports RSA, ECDSA, and Ed25519. When enabled, installs fail if no `.sig` file is found.
+- **Signed metadata** (opt-in): remote registry, policy, and org config fetches are verified against a detached `.sig` file using the same `signature_public_key` trust root. Enable fail-closed mode with `scuta config set require_signed_metadata true`. Operators sign with `scuta admin keygen` / `scuta admin sign` — see [docs/REGISTRY.md](docs/REGISTRY.md#signing-your-registry).
+- **Signed bundles**: `scuta bundle create --sign <key>` signs the bundle manifest (which pins every asset by SHA-256, across all platforms in the bundle). `bundle verify` and `bundle install` check the signature against the `signature_public_key` trust root; an invalid signature is always fatal, and `require_signature true` makes unsigned bundles fail closed (and blocks `--skip-verify` — the policy is authoritative). Asset checksums are verified on every install either way.
+- **Provenance verification** (opt-in): cosign keyless signatures and SLSA build provenance are checked via the `cosign` / `slsa-verifier` CLIs when present on PATH. Enable with `scuta config set provenance_verify auto` (verify when a release ships sigstore bundles, `.sig`+`.pem` pairs, a cosign-signed `checksums.txt`, or `*.intoto.jsonl` attestations; skip quietly otherwise) or `require` (fail unless at least one backend verifies). Present-but-invalid material is always fatal, in any mode. The expected signer identity defaults to the release repository's GitHub Actions workflows; pin it explicitly with `cosign_identity_regexp` / `cosign_oidc_issuer` (local/system config only — never honored from remote config, and remote config can strengthen but never weaken the mode). Verified backends are recorded in state and surfaced by `scuta doctor --audit`.
 - **Policy enforcement**: Organizations can enforce version constraints via a remote `policy_url` — allowed/blocked versions, minimum Scuta version.
+- **Download cache**: verified assets are cached content-addressed by SHA-256 under `~/.scuta/cache`, so repeat installs skip the network without weakening verification — only checksum-verified assets are ever cached, and entries are re-hashed on every hit. Inspect with `scuta cache info`; disable with `scuta config set disable_download_cache true`.
 
 ## Telemetry
 
@@ -159,9 +226,58 @@ scuta config set telemetry true    # enable
 scuta config set telemetry false   # disable
 ```
 
-## Registry Modes
+## Run Your Own Registry
 
-During `scuta init`, you choose a registry mode:
+The bundled registry is intentionally tiny — **it is meant to be replaced with
+yours.** Point Scuta at your own list of tools and it becomes an org-wide version
+manager for whatever CLIs your team ships or depends on (private repos, curated
+public tools, or both).
+
+Scuta merges three layers, later wins on conflicts:
+**embedded** (baked in) → **remote** (`registry_url`, cached 1h) →
+**local** (`~/.scuta/local.yaml`, per-machine).
+
+**Local only — no hosting:**
+
+```bash
+scuta config set registry_url local
+scuta registry add ripgrep --repo BurntSushi/ripgrep --description "fast grep"
+scuta install ripgrep
+```
+
+**Host your own — org-wide:** write a `registry.yaml`, serve it over HTTPS
+(GitHub raw, a private repo, S3, any static host), and point every machine at it:
+
+```bash
+scuta config set registry_url https://raw.githubusercontent.com/acme/tools/main/registry.yaml
+scuta config set github_token <token>   # only for private registries/repos
+scuta install --all
+```
+
+Minimal manifest:
+
+```yaml
+# registry.yaml
+tools:
+  pilum:
+    description: "Multi-cloud deployment CLI"
+    repo: sid-technologies/Pilum
+  ripgrep:
+    description: "Recursively search directories"
+    repo: BurntSushi/ripgrep
+    bin: rg                    # executable name if it differs from the tool name
+```
+
+Inspect the merged result anytime:
+
+```bash
+scuta registry list --all      # shows a SOURCE column: embedded / remote / local
+```
+
+Full schema (asset templates, os/arch maps, version prefixes, dependencies) and
+hosting options are in **[docs/REGISTRY.md](docs/REGISTRY.md)**.
+
+During `scuta init` you can pick a mode up front:
 
 | Mode | Description |
 |------|-------------|
@@ -170,6 +286,24 @@ During `scuta init`, you choose a registry mode:
 | **Local only** | No remote registry — manage tools manually via `scuta registry add` |
 
 Change anytime with `scuta config set registry_url <url>` or `scuta config set registry_url local`.
+
+### Org bootstrap
+
+Point a new machine at your org in one command — no prompts, CI-friendly:
+
+```bash
+scuta init --from https://example.com/scuta/config.yaml --key org.pub
+```
+
+This installs `org.pub` as the local trust root *before* anything is fetched,
+enables `require_signed_metadata` (all remote metadata fails closed from then
+on), verifies and applies the org config, and saves the URL as `config_url` so
+future runs keep pulling org settings (registry, policy, security flags).
+Bootstrapping without `--key` works but is unverified — Scuta warns.
+
+To publish an org config, start from the
+[registry-starter](https://github.com/sid-technologies/registry-starter)
+template.
 
 ## Global Flags
 

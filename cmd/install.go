@@ -176,6 +176,8 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	if cfgLoadErr == nil && (cfg.RequireSignature || cfg.SignaturePublicKey != "") {
 		inst.SetSignatureVerification(cfg.RequireSignature, []byte(cfg.SignaturePublicKey))
 	}
+	applyDownloadCacheConfig(inst, scutaDir)
+	applyProvenanceConfig(inst, scutaDir)
 
 	start := time.Now()
 
@@ -452,6 +454,9 @@ func installOneTool(
 		Version:     result.Version,
 		InstalledAt: time.Now(),
 		BinaryPath:  result.BinaryPath,
+		Sha256:      result.Sha256,
+		Verified:    result.Verified,
+		Provenance:  result.Provenance,
 	})
 
 	output.Success("Installed %s %s", toolName, result.Version)
@@ -617,6 +622,9 @@ func runInstallFromArchive(ctx context.Context, args []string, archivePath strin
 		Version:     result.Version,
 		InstalledAt: time.Now(),
 		BinaryPath:  result.BinaryPath,
+		Sha256:      result.Sha256,
+		Verified:    result.Verified,
+		Provenance:  result.Provenance,
 	})
 
 	if err := st.Save(scutaDir); err != nil {
@@ -688,6 +696,8 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 		}
 		inst = installer.New(ghClient, scutaDir)
 	}
+	applyDownloadCacheConfig(inst, scutaDir)
+	applyProvenanceConfig(inst, scutaDir)
 
 	// Check if already installed (skip unless force)
 	if !forceFlag && versionFlag == "" {
@@ -702,7 +712,7 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 	// Get the release
 	var release *github.Release
 	if versionFlag != "" {
-		release, err = ghClient.GetRelease(ctx, repo, versionFlag)
+		release, err = ghClient.GetReleaseTolerant(ctx, repo, versionFlag)
 	} else {
 		release, err = ghClient.GetLatestRelease(ctx, repo)
 	}
@@ -733,6 +743,7 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 	}
 
 	// Best-effort checksum verification for unregistered tools
+	checksumVerified := false
 	if skipVerifyFlag {
 		output.Warning("Skipping checksum verification (--skip-verify)")
 	} else {
@@ -750,8 +761,16 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 					return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("checksum mismatch for %s: %v", toolName, verifyErr))
 				}
 				output.Debugf("Checksum verified for %s", asset.Name)
+				checksumVerified = true
 			}
 		}
+	}
+
+	// Optional provenance backends (cosign, slsa) — same gate as registry
+	// installs, over the exact bytes just verified.
+	provenanceBackends, provErr := inst.VerifyProvenance(ctx, release, repo, asset.Name, archivePath, skipVerifyFlag)
+	if provErr != nil {
+		return exitcodes.NewError(exitcodes.Install, fmt.Sprintf("provenance verification failed for %s: %v", toolName, provErr))
 	}
 
 	if ctx.Err() != nil {
@@ -794,12 +813,20 @@ func runInstallDirect(ctx context.Context, cmd *cobra.Command, repoArg string, v
 		binaryPath = result.BinaryPath
 	}
 
-	// Update state with repo info
+	// Update state with repo info. Hashing failure is non-fatal — the
+	// install already succeeded; audit reports the tool as unknown instead.
+	binarySha, shaErr := installer.FileSHA256(binaryPath)
+	if shaErr != nil {
+		output.Debugf("Could not hash installed binary %s: %v", binaryPath, shaErr)
+	}
 	st.SetTool(toolName, state.ToolState{
 		Version:     version,
 		InstalledAt: time.Now(),
 		BinaryPath:  binaryPath,
 		Repo:        repo,
+		Sha256:      binarySha,
+		Verified:    checksumVerified,
+		Provenance:  provenanceBackends,
 	})
 
 	if err := st.Save(stateDir); err != nil {

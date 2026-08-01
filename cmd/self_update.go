@@ -71,6 +71,7 @@ func runSelfUpdate(cmd *cobra.Command, _ []string) error {
 
 	// Download and install new binary
 	inst := installer.New(ghClient, scutaDir)
+	applyDownloadCacheConfig(inst, scutaDir)
 	result, err := inst.Install(ctx, "scuta", update.Repo, update.LatestVersion, true, false)
 	if err != nil {
 		return err

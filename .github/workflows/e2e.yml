@@ -1,0 +1,50 @@
+name: E2E
+
+# Live end-to-end tests that install a real tool from GitHub Releases and
+# exercise the full download -> verify -> extract -> install -> run -> uninstall
+# path. These hit the network and public GitHub, so they run on a schedule,
+# on demand, and on pushes to main -- NOT on every pull request, to keep
+# GitHub API rate limits from flaking PR checks.
+
+on:
+  schedule:
+    # Mondays 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Live install lifecycle (${{ matrix.os }})
+    strategy:
+      # Run every OS to completion — a flake on one platform should not mask
+      # results on the others.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Run e2e tests
+        env:
+          # The workflow token lifts the unauthenticated GitHub rate limit.
+          # runScuta maps GITHUB_TOKEN to the SCUTA_GITHUB_TOKEN scuta reads.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Override any of these to point the suite at a different release:
+          #   SCUTA_E2E_REPO / SCUTA_E2E_VERSION / SCUTA_E2E_BIN
+        run: go test -tags=e2e -v -timeout=10m ./test/e2e/...

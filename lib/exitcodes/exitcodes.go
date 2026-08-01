@@ -12,6 +12,7 @@ const (
 	IO          = 5 // File I/O errors (can't read/write files)
 	InvalidArgs = 6 // Invalid CLI arguments (unknown tool, bad flags)
 	Lock        = 7 // Lock errors (another install is running)
+	Drift       = 8 // Sync drift (sync --check found divergence from the manifest)
 )
 
 // Error is an error that carries a specific exit code.

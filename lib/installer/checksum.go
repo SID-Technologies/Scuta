@@ -15,6 +15,22 @@ import (
 
 // VerifyChecksum computes the SHA256 of the file at filePath and compares it
 // case-insensitively to expectedSHA256. Returns nil on match, error on mismatch.
+// FileSHA256 returns the lowercase hex SHA-256 of the file at path.
+func FileSHA256(path string) (string, error) {
+	f, err := os.Open(path) //nolint:gosec // path comes from scuta-managed locations
+	if err != nil {
+		return "", errors.Wrap(err, "opening file for checksum")
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", errors.Wrap(err, "computing SHA256")
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func VerifyChecksum(filePath string, expectedSHA256 string) error {
 	f, err := os.Open(filePath)
 	if err != nil {

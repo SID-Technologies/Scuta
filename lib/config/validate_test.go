@@ -96,3 +96,14 @@ func TestMaskValue(t *testing.T) {
 		t.Errorf("expected unmasked value, got %q", got)
 	}
 }
+
+func TestValidateProvenanceVerify(t *testing.T) {
+	for _, v := range []string{"off", "auto", "require", "AUTO", ""} {
+		if err := ValidateValue("provenance_verify", v); err != nil {
+			t.Errorf("ValidateValue(provenance_verify, %q): %v", v, err)
+		}
+	}
+	if err := ValidateValue("provenance_verify", "strict"); err == nil {
+		t.Error("expected error for provenance_verify=strict")
+	}
+}

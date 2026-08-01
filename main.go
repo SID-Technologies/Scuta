@@ -19,9 +19,20 @@ func main() {
 	if dir, err := path.ScutaDir(); err == nil {
 		registry.SetScutaDir(dir)
 
-		cfg, err := config.Load(dir)
+		// Merged view (defaults + system + remote org config + local) so an
+		// org-managed registry_url from config_url takes effect. The remote
+		// layer is signature-verified against the locally resolved trust
+		// root and can never supply that trust root itself.
+		cfg, err := config.LoadWithMerge(dir)
 		if err == nil && cfg.RegistryURL != "" {
 			registry.SetRegistryURL(cfg.RegistryURL)
+		}
+
+		// Trust root and fail-closed flag come from local + system config
+		// only — never from remotely fetched config.
+		trust := config.LoadTrusted(dir)
+		if trust.SignaturePublicKey != "" || trust.RequireSignedMetadata {
+			registry.SetVerification([]byte(trust.SignaturePublicKey), trust.RequireSignedMetadata)
 		}
 	}
 

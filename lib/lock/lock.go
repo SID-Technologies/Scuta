@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/sid-technologies/scuta/lib/errors"
@@ -134,15 +133,8 @@ func isStale(info Info) bool {
 		return false
 	}
 
-	if info.PID > 0 {
-		proc, err := os.FindProcess(info.PID)
-		if err != nil {
-			return true
-		}
-		err = proc.Signal(syscall.Signal(0))
-		if err != nil {
-			return true
-		}
+	if info.PID > 0 && !processAlive(info.PID) {
+		return true
 	}
 
 	return false

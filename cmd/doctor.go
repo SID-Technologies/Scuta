@@ -1,12 +1,16 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 
+	"github.com/sid-technologies/scuta/lib/audit"
 	"github.com/sid-technologies/scuta/lib/auth"
 	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/cve"
+	"github.com/sid-technologies/scuta/lib/exitcodes"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/registry"
@@ -27,11 +31,21 @@ func DoctorCmd() *cobra.Command {
   - GitHub authentication is configured
   - Registry is reachable
   - Policy compliance (version constraints)
-  - Known vulnerabilities (via OSV.dev)`,
+  - Known vulnerabilities (via OSV.dev)
+
+With --audit, runs a security audit instead: per-tool provenance
+(was the install checksum-verified?), tamper detection (does the binary
+on disk still match the hash recorded at install?), policy compliance,
+CVEs, and machine posture (trust root, signed metadata, policy).
+Combine with the global --json flag to emit the audit report as JSON
+for fleet aggregation.
+
+Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
 		RunE: runDoctor,
 	}
 
 	cmd.Flags().Bool("skip-cve", false, "Skip CVE vulnerability check (for offline environments)")
+	cmd.Flags().Bool("audit", false, "Security audit: provenance, tamper detection, policy and posture")
 
 	return cmd
 }
@@ -42,6 +56,11 @@ func init() {
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
+	if auditFlag, _ := cmd.Flags().GetBool("audit"); auditFlag {
+		// The persistent --json flag switches the audit to machine output.
+		return runDoctorAudit(cmd, jsonFlag)
+	}
+
 	output.Header("Scuta Doctor")
 
 	issues := 0
@@ -99,7 +118,8 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 				issues++
 				continue
 			}
-			if info.Mode()&0o111 == 0 {
+			// Windows has no POSIX execute bits; presence is sufficient there.
+			if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 				output.PrintCheck(false, "%s binary is executable", name)
 				allGood = false
 				issues++
@@ -208,4 +228,124 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	}
 
 	return nil
+}
+
+// runDoctorAudit builds and renders the security audit report.
+// Critical findings exit non-zero so CI can gate on them.
+func runDoctorAudit(cmd *cobra.Command, jsonOut bool) error {
+	scutaDir, err := path.ScutaDir()
+	if err != nil {
+		return err
+	}
+
+	st, err := state.Load(scutaDir)
+	if err != nil {
+		return err
+	}
+
+	pol := loadPolicy(scutaDir)
+	trusted := config.LoadTrusted(scutaDir)
+
+	report := audit.New(version)
+	report.Posture = audit.CheckPosture(audit.PostureInput{
+		TrustRootConfigured:   trusted.SignaturePublicKey != "",
+		RequireSignature:      trusted.RequireSignature,
+		RequireSignedMetadata: trusted.RequireSignedMetadata,
+		PolicyConfigured:      pol != nil,
+		ConfigURL:             trusted.ConfigURL,
+	})
+	report.Tools = audit.CheckTools(st, pol)
+
+	appendCVEFindings(cmd, scutaDir, report)
+	report.Finalize()
+
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(report); err != nil {
+			return err
+		}
+	} else {
+		printAuditReport(report)
+	}
+
+	if report.Summary.Criticals > 0 {
+		// Critical findings are a CI gate signal, not a usage error.
+		cmd.SilenceUsage = true
+		return exitcodes.NewError(exitcodes.General, fmt.Sprintf("audit found %d critical finding(s)", report.Summary.Criticals))
+	}
+
+	return nil
+}
+
+// appendCVEFindings attaches known-vulnerability findings per tool unless
+// --skip-cve is set. CVE lookups are best-effort: failures are debug-logged,
+// never fatal, so audits work offline.
+func appendCVEFindings(cmd *cobra.Command, scutaDir string, report *audit.Report) {
+	if skip, _ := cmd.Flags().GetBool("skip-cve"); skip {
+		return
+	}
+
+	for i := range report.Tools {
+		t := &report.Tools[i]
+		vulns, err := cve.CheckWithCache(scutaDir, t.Name, t.Version, "Go")
+		if err != nil {
+			output.Debugf("CVE check failed for %s: %v", t.Name, err)
+			continue
+		}
+		for _, v := range vulns {
+			t.Findings = append(t.Findings, audit.Finding{
+				Severity: audit.SeverityWarning,
+				Code:     audit.CodeKnownVulnerability,
+				Message:  fmt.Sprintf("%s: %s", v.ID, v.Summary),
+			})
+		}
+	}
+}
+
+// printAuditReport renders the human-readable audit output.
+func printAuditReport(report *audit.Report) {
+	output.Header("Scuta Audit")
+
+	output.Info("Machine posture:")
+	output.PrintCheck(report.Posture.TrustRootConfigured, "Trust root configured (signature_public_key)")
+	output.PrintCheck(report.Posture.RequireSignedMetadata, "Signed metadata required (require_signed_metadata)")
+	output.PrintCheck(report.Posture.PolicyConfigured, "Policy configured")
+	if report.Posture.ConfigURL != "" {
+		output.Dimmed("  Org config: " + report.Posture.ConfigURL)
+	}
+
+	if len(report.Tools) == 0 {
+		output.Dimmed("  No tools installed")
+	}
+
+	for i := range report.Tools {
+		t := &report.Tools[i]
+		fmt.Println()
+		output.Info("%s %s", t.Name, t.Version)
+		if len(t.Findings) == 0 {
+			output.PrintCheck(true, "verified install, binary matches install-time hash")
+			continue
+		}
+		for _, f := range t.Findings {
+			switch f.Severity {
+			case audit.SeverityCritical:
+				output.PrintCheck(false, "%s", f.Message)
+			case audit.SeverityWarning:
+				output.PrintCheckWarn("%s", f.Message)
+			default:
+				output.Dimmed("  " + f.Message)
+			}
+		}
+	}
+
+	fmt.Println()
+	switch {
+	case report.Summary.Criticals > 0:
+		output.Error("%d critical, %d warning finding(s)", report.Summary.Criticals, report.Summary.Warnings)
+	case report.Summary.Warnings > 0:
+		output.Warning("%d warning finding(s)", report.Summary.Warnings)
+	default:
+		output.Success("Audit clean — %d tool(s) checked", report.Summary.Tools)
+	}
 }

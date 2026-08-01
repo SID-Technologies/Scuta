@@ -180,6 +180,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	} else {
 		inst = installer.New(ghClient, scutaDir)
 	}
+	applyDownloadCacheConfig(inst, scutaDir)
+	applyProvenanceConfig(inst, scutaDir)
 	pol := loadPolicy(scutaDir)
 	start := time.Now()
 	var toolResults []history.ToolResult
@@ -217,9 +219,17 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		var result *installer.InstallResult
 		var err error
 
+		// A "local"-sourced entry (or one absent from the registry) is a
+		// direct-installed owner/repo tool. Mirror the best-effort checksum
+		// behavior used at install time; registry-blessed ("remote") tools
+		// stay fail-closed.
+		directInstalled := !inRegistry || reg.Source(u.Name) == registry.SourceLocal
+
 		if inRegistry && hasExtendedOpts(tool) {
 			opts := buildInstallOpts(tool)
 			result, err = inst.InstallWithOpts(ctx, u.Name, repo, "", true, skipVerifyFlag, opts)
+		} else if directInstalled {
+			result, err = inst.InstallWithOpts(ctx, u.Name, repo, "", true, skipVerifyFlag, installer.InstallOpts{BestEffort: true})
 		} else {
 			result, err = inst.Install(ctx, u.Name, repo, "", true, skipVerifyFlag)
 		}
@@ -241,6 +251,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			UpdatedAt:   time.Now(),
 			BinaryPath:  result.BinaryPath,
 			Repo:        st.Tools[u.Name].Repo,
+			Sha256:      result.Sha256,
+			Verified:    result.Verified,
+			Provenance:  result.Provenance,
 		})
 
 		output.Success("Updated %s %s → %s", u.Name, u.CurrentVersion, result.Version)

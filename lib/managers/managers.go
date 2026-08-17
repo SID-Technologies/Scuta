@@ -27,7 +27,7 @@ type Manager interface {
 
 // All returns every supported manager.
 func All() []Manager {
-	return []Manager{NewGoBin()}
+	return []Manager{NewGoBin(), NewBrew(), NewMise(), NewDpkg()}
 }
 
 // Collect runs each manager and assembles the system section of the audit

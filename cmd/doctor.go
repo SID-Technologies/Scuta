@@ -40,7 +40,7 @@ on disk still match the hash recorded at install?), policy compliance,
 CVEs, and machine posture (trust root, signed metadata, policy).
 Combine with the global --json flag to emit the audit report as JSON
 for fleet aggregation. Add --system to also audit packages installed by
-system package managers (currently go install): origin, version, and
+system package managers (go install, Homebrew, mise, dpkg): origin, version, and
 whether integrity can be verified.
 
 Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
@@ -49,7 +49,7 @@ Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
 
 	cmd.Flags().Bool("skip-cve", false, "Skip CVE vulnerability check (for offline environments)")
 	cmd.Flags().Bool("audit", false, "Security audit: provenance, tamper detection, policy and posture")
-	cmd.Flags().Bool("system", false, "With --audit: also audit system package managers (go install, ...)")
+	cmd.Flags().Bool("system", false, "With --audit: also audit system package managers (go install, brew, mise, dpkg)")
 
 	return cmd
 }

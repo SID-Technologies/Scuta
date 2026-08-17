@@ -40,6 +40,10 @@ const (
 	CodeNoTrustRoot        = "no-trust-root"
 	CodeUnsignedMetadata   = "unsigned-metadata-allowed"
 	CodeNoPolicy           = "no-policy"
+	CodeManagerUnreadable  = "manager-unreadable"
+	CodeUnpinnedBuild      = "unpinned-build"
+	CodeNoIntegrityData    = "no-integrity-data"
+	CodeDirtyBuild         = "dirty-build"
 )
 
 // SchemaVersion identifies the JSON report format.
@@ -83,9 +87,10 @@ type Posture struct {
 
 // Summary aggregates finding counts across the report.
 type Summary struct {
-	Tools     int `json:"tools"`
-	Criticals int `json:"criticals"`
-	Warnings  int `json:"warnings"`
+	Tools          int `json:"tools"`
+	SystemPackages int `json:"system_packages,omitempty"`
+	Criticals      int `json:"criticals"`
+	Warnings       int `json:"warnings"`
 }
 
 // Report is the full audit output.
@@ -98,6 +103,7 @@ type Report struct {
 	Arch          string    `json:"arch"`
 	Posture       Posture   `json:"posture"`
 	Tools         []Tool    `json:"tools"`
+	System        *System   `json:"system,omitempty"`
 	Summary       Summary   `json:"summary"`
 }
 
@@ -290,6 +296,18 @@ func (r *Report) Finalize() {
 	count(r.Posture.Findings)
 	for i := range r.Tools {
 		count(r.Tools[i].Findings)
+	}
+
+	if r.System == nil {
+		return
+	}
+	for i := range r.System.Managers {
+		m := &r.System.Managers[i]
+		r.Summary.SystemPackages += len(m.Packages)
+		count(m.Findings)
+		for j := range m.Packages {
+			count(m.Packages[j].Findings)
+		}
 	}
 }
 

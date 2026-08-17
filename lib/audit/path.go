@@ -139,7 +139,7 @@ func lookPath(env PathEnv, dirs []string, name string) (string, bool) {
 	cands := candidates(env, name)
 	for _, dir := range dirs {
 		for _, cand := range cands {
-			p := filepath.Join(dir, cand)
+			p := joinPath(env, dir, cand)
 
 			info, err := env.Stat(p)
 			if err != nil || info.IsDir() {
@@ -154,6 +154,18 @@ func lookPath(env PathEnv, dirs []string, name string) (string, bool) {
 	}
 
 	return "", false
+}
+
+// joinPath joins a PATH directory and a file name with a forward slash,
+// which every supported platform accepts. filepath.Join would use the host
+// separator, making lookups (and their cross-platform tests) depend on the
+// machine running the check rather than the injected GOOS.
+func joinPath(env PathEnv, dir, name string) string {
+	cut := "/"
+	if env.GOOS == "windows" {
+		cut = `/\`
+	}
+	return strings.TrimRight(dir, cut) + "/" + name
 }
 
 // samePath reports whether two paths refer to the same file, resolving

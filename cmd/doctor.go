@@ -256,6 +256,13 @@ func runDoctorAudit(cmd *cobra.Command, jsonOut bool) error {
 	})
 	report.Tools = audit.CheckTools(st, pol)
 
+	// PATH shadowing: a verified binary that is not what PATH resolves to is
+	// a critical finding; bin dir absent from PATH is a machine-level warning.
+	if binDir, binErr := path.BinDir(); binErr == nil {
+		report.Posture.Findings = append(report.Posture.Findings,
+			audit.CheckPathShadowing(audit.SystemPathEnv(), report.Tools, binDir)...)
+	}
+
 	appendCVEFindings(cmd, scutaDir, report)
 	report.Finalize()
 

@@ -35,6 +35,8 @@ const (
 	CodeUnverifiedInstall  = "unverified-install"
 	CodePolicyViolation    = "policy-violation"
 	CodeKnownVulnerability = "known-vulnerability"
+	CodeShadowedBinary     = "shadowed-binary"
+	CodeBinDirNotInPath    = "bin-dir-not-in-path"
 	CodeNoTrustRoot        = "no-trust-root"
 	CodeUnsignedMetadata   = "unsigned-metadata-allowed"
 	CodeNoPolicy           = "no-policy"
@@ -64,6 +66,8 @@ type Tool struct {
 	Sha256        string    `json:"sha256,omitempty"`
 	CurrentSha256 string    `json:"current_sha256,omitempty"`
 	Drift         bool      `json:"drift"`
+	EffectivePath string    `json:"effective_path,omitempty"`
+	Shadowed      bool      `json:"shadowed,omitempty"`
 	Findings      []Finding `json:"findings,omitempty"`
 }
 

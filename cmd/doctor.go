@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/registry"
+	"github.com/sid-technologies/scuta/lib/sbom"
 	"github.com/sid-technologies/scuta/lib/shellutil"
 	"github.com/sid-technologies/scuta/lib/state"
 
@@ -41,7 +43,8 @@ CVEs, and machine posture (trust root, signed metadata, policy).
 Combine with the global --json flag to emit the audit report as JSON
 for fleet aggregation. Add --system to also audit packages installed by
 system package managers (go install, Homebrew, mise, dpkg): origin, version, and
-whether integrity can be verified.
+whether integrity can be verified. Add --sbom cyclonedx to emit the
+inventory as a CycloneDX 1.5 JSON document instead of the report.
 
 Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
 		RunE: runDoctor,
@@ -50,6 +53,7 @@ Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
 	cmd.Flags().Bool("skip-cve", false, "Skip CVE vulnerability check (for offline environments)")
 	cmd.Flags().Bool("audit", false, "Security audit: provenance, tamper detection, policy and posture")
 	cmd.Flags().Bool("system", false, "With --audit: also audit system package managers (go install, brew, mise, dpkg)")
+	cmd.Flags().String("sbom", "", "With --audit: emit an SBOM instead of the report (formats: cyclonedx)")
 
 	return cmd
 }
@@ -60,7 +64,12 @@ func init() {
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
-	if auditFlag, _ := cmd.Flags().GetBool("audit"); auditFlag {
+	auditFlag, _ := cmd.Flags().GetBool("audit")
+	sbomFormat, _ := cmd.Flags().GetString("sbom")
+	if sbomFormat != "" && !auditFlag {
+		return errors.New("--sbom requires --audit")
+	}
+	if auditFlag {
 		// The persistent --json flag switches the audit to machine output.
 		return runDoctorAudit(cmd, jsonFlag)
 	}
@@ -275,14 +284,8 @@ func runDoctorAudit(cmd *cobra.Command, jsonOut bool) error {
 
 	report.Finalize()
 
-	if jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(report); err != nil {
-			return err
-		}
-	} else {
-		printAuditReport(report)
+	if err := renderAudit(cmd, report, jsonOut); err != nil {
+		return err
 	}
 
 	if report.Summary.Criticals > 0 {
@@ -292,6 +295,35 @@ func runDoctorAudit(cmd *cobra.Command, jsonOut bool) error {
 	}
 
 	return nil
+}
+
+// renderAudit writes the audit in the requested representation: a CycloneDX
+// SBOM when --sbom is set, the JSON report with --json, or the human report.
+func renderAudit(cmd *cobra.Command, report *audit.Report, jsonOut bool) error {
+	sbomFormat, _ := cmd.Flags().GetString("sbom")
+	switch {
+	case sbomFormat != "":
+		if sbomFormat != "cyclonedx" {
+			return fmt.Errorf("unsupported SBOM format %q (formats: cyclonedx)", sbomFormat)
+		}
+		doc, err := sbom.FromReport(report)
+		if err != nil {
+			return err
+		}
+		return encodeJSON(doc)
+	case jsonOut:
+		return encodeJSON(report)
+	default:
+		printAuditReport(report)
+		return nil
+	}
+}
+
+// encodeJSON writes v to stdout as indented JSON.
+func encodeJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
 
 // appendCVEFindings attaches known-vulnerability findings per tool unless

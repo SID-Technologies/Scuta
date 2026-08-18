@@ -11,6 +11,7 @@ import (
 	"github.com/sid-technologies/scuta/lib/config"
 	"github.com/sid-technologies/scuta/lib/cve"
 	"github.com/sid-technologies/scuta/lib/exitcodes"
+	"github.com/sid-technologies/scuta/lib/managers"
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/registry"
@@ -38,7 +39,9 @@ With --audit, runs a security audit instead: per-tool provenance
 on disk still match the hash recorded at install?), policy compliance,
 CVEs, and machine posture (trust root, signed metadata, policy).
 Combine with the global --json flag to emit the audit report as JSON
-for fleet aggregation.
+for fleet aggregation. Add --system to also audit packages installed by
+system package managers (go install, Homebrew, mise, dpkg): origin, version, and
+whether integrity can be verified.
 
 Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
 		RunE: runDoctor,
@@ -46,6 +49,7 @@ Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
 
 	cmd.Flags().Bool("skip-cve", false, "Skip CVE vulnerability check (for offline environments)")
 	cmd.Flags().Bool("audit", false, "Security audit: provenance, tamper detection, policy and posture")
+	cmd.Flags().Bool("system", false, "With --audit: also audit system package managers (go install, brew, mise, dpkg)")
 
 	return cmd
 }
@@ -256,7 +260,19 @@ func runDoctorAudit(cmd *cobra.Command, jsonOut bool) error {
 	})
 	report.Tools = audit.CheckTools(st, pol)
 
+	// PATH shadowing: a verified binary that is not what PATH resolves to is
+	// a critical finding; bin dir absent from PATH is a machine-level warning.
+	if binDir, binErr := path.BinDir(); binErr == nil {
+		report.Posture.Findings = append(report.Posture.Findings,
+			audit.CheckPathShadowing(audit.SystemPathEnv(), report.Tools, binDir)...)
+	}
+
 	appendCVEFindings(cmd, scutaDir, report)
+
+	if systemFlag, _ := cmd.Flags().GetBool("system"); systemFlag {
+		report.System = managers.Collect(cmd.Context(), managers.All())
+	}
+
 	report.Finalize()
 
 	if jsonOut {
@@ -339,6 +355,8 @@ func printAuditReport(report *audit.Report) {
 		}
 	}
 
+	printSystemSection(report)
+
 	fmt.Println()
 	switch {
 	case report.Summary.Criticals > 0:
@@ -347,5 +365,56 @@ func printAuditReport(report *audit.Report) {
 		output.Warning("%d warning finding(s)", report.Summary.Warnings)
 	default:
 		output.Success("Audit clean — %d tool(s) checked", report.Summary.Tools)
+	}
+}
+
+// printSystemSection renders the package-manager audit, if one was run.
+// Clean packages are summarized, not listed; only findings get lines.
+func printSystemSection(report *audit.Report) {
+	if report.System == nil {
+		return
+	}
+
+	for i := range report.System.Managers {
+		m := &report.System.Managers[i]
+		fmt.Println()
+		if !m.Detected {
+			output.Dimmed(fmt.Sprintf("  %s: not detected", m.Name))
+			continue
+		}
+
+		verifiable := 0
+		for j := range m.Packages {
+			if m.Packages[j].Integrity == audit.IntegrityRecorded {
+				verifiable++
+			}
+		}
+		output.Info("%s: %d package(s), %d with recorded integrity", m.Name, len(m.Packages), verifiable)
+
+		for _, f := range m.Findings {
+			printFinding(f)
+		}
+		for j := range m.Packages {
+			pkg := &m.Packages[j]
+			for _, f := range pkg.Findings {
+				printFinding(audit.Finding{
+					Severity: f.Severity,
+					Code:     f.Code,
+					Message:  fmt.Sprintf("%s: %s", pkg.Name, f.Message),
+				})
+			}
+		}
+	}
+}
+
+// printFinding renders one finding at its severity.
+func printFinding(f audit.Finding) {
+	switch f.Severity {
+	case audit.SeverityCritical:
+		output.PrintCheck(false, "%s", f.Message)
+	case audit.SeverityWarning:
+		output.PrintCheckWarn("%s", f.Message)
+	default:
+		output.Dimmed("  " + f.Message)
 	}
 }

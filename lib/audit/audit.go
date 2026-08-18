@@ -28,16 +28,25 @@ const (
 
 // Finding codes, stable identifiers for fleet aggregation.
 const (
-	CodeMissingBinary      = "missing-binary"
-	CodeNotExecutable      = "not-executable"
-	CodeBinaryDrift        = "binary-drift"
-	CodeUnknownProvenance  = "unknown-provenance"
-	CodeUnverifiedInstall  = "unverified-install"
-	CodePolicyViolation    = "policy-violation"
-	CodeKnownVulnerability = "known-vulnerability"
-	CodeNoTrustRoot        = "no-trust-root"
-	CodeUnsignedMetadata   = "unsigned-metadata-allowed"
-	CodeNoPolicy           = "no-policy"
+	CodeMissingBinary       = "missing-binary"
+	CodeNotExecutable       = "not-executable"
+	CodeBinaryDrift         = "binary-drift"
+	CodeUnknownProvenance   = "unknown-provenance"
+	CodeUnverifiedInstall   = "unverified-install"
+	CodePolicyViolation     = "policy-violation"
+	CodeKnownVulnerability  = "known-vulnerability"
+	CodeShadowedBinary      = "shadowed-binary"
+	CodeBinDirNotInPath     = "bin-dir-not-in-path"
+	CodeNoTrustRoot         = "no-trust-root"
+	CodeUnsignedMetadata    = "unsigned-metadata-allowed"
+	CodeNoPolicy            = "no-policy"
+	CodeManagerUnreadable   = "manager-unreadable"
+	CodeUnpinnedBuild       = "unpinned-build"
+	CodeNoIntegrityData     = "no-integrity-data"
+	CodeDirtyBuild          = "dirty-build"
+	CodeThirdPartySource    = "third-party-source"
+	CodeConfigDrift         = "config-drift"
+	CodeInventorySummarized = "inventory-summarized"
 )
 
 // SchemaVersion identifies the JSON report format.
@@ -64,6 +73,8 @@ type Tool struct {
 	Sha256        string    `json:"sha256,omitempty"`
 	CurrentSha256 string    `json:"current_sha256,omitempty"`
 	Drift         bool      `json:"drift"`
+	EffectivePath string    `json:"effective_path,omitempty"`
+	Shadowed      bool      `json:"shadowed,omitempty"`
 	Findings      []Finding `json:"findings,omitempty"`
 }
 
@@ -79,9 +90,10 @@ type Posture struct {
 
 // Summary aggregates finding counts across the report.
 type Summary struct {
-	Tools     int `json:"tools"`
-	Criticals int `json:"criticals"`
-	Warnings  int `json:"warnings"`
+	Tools          int `json:"tools"`
+	SystemPackages int `json:"system_packages,omitempty"`
+	Criticals      int `json:"criticals"`
+	Warnings       int `json:"warnings"`
 }
 
 // Report is the full audit output.
@@ -94,6 +106,7 @@ type Report struct {
 	Arch          string    `json:"arch"`
 	Posture       Posture   `json:"posture"`
 	Tools         []Tool    `json:"tools"`
+	System        *System   `json:"system,omitempty"`
 	Summary       Summary   `json:"summary"`
 }
 
@@ -286,6 +299,18 @@ func (r *Report) Finalize() {
 	count(r.Posture.Findings)
 	for i := range r.Tools {
 		count(r.Tools[i].Findings)
+	}
+
+	if r.System == nil {
+		return
+	}
+	for i := range r.System.Managers {
+		m := &r.System.Managers[i]
+		r.Summary.SystemPackages += len(m.Packages)
+		count(m.Findings)
+		for j := range m.Packages {
+			count(m.Packages[j].Findings)
+		}
 	}
 }
 

@@ -77,6 +77,9 @@ scuta update
 | `scuta doctor --audit --json` | Audit report as JSON (for CI / fleet aggregation) |
 | `scuta doctor --audit --system` | Also audit system package managers (go install, brew, mise, dpkg) |
 | `scuta doctor --audit --sbom cyclonedx` | Emit the audit inventory as a CycloneDX 1.5 SBOM |
+| `scuta doctor --audit --output <file>` | Also write the report to a file (atomic; `--sign-key`, `--if-changed`) |
+| `scuta monitor install` | Schedule recurring audits (launchd / systemd timer, no daemon) |
+| `scuta monitor status` / `uninstall` | Inspect or remove the schedule |
 | `scuta history` | Show install/update history |
 | `scuta rollback <tool>` | Reinstall the previous version from history |
 | `scuta sync` | Reconcile installed tools to a declarative manifest (scuta.lock.yaml) |
@@ -210,6 +213,7 @@ Scuta verifies every download:
 - **PATH shadowing detection**: `scuta doctor --audit` resolves every managed tool on PATH and flags (critical) when a different binary earlier on PATH shadows the verified install, and warns when scuta's bin directory is not on PATH at all.
 - **System package audit** (opt-in): `scuta doctor --audit --system` inventories packages installed by system package managers and reports origin, version, and integrity. Adapters: `go install` (build metadata embedded in each binary: module path, version, module sum, VCS state; flags source-checkout builds, missing module sums, and dirty working trees), Homebrew (install receipts: bottle vs source build, third-party taps), mise (tool inventory), and dpkg (`dpkg --verify`: flags binaries that no longer match their package checksums). Managers that keep no integrity data are reported as not verifiable rather than passed silently.
 - **SBOM export**: `scuta doctor --audit --sbom cyclonedx` emits the audit inventory (managed tools, plus system packages with `--system`) as a CycloneDX 1.5 JSON document: purls, recorded install hashes, and the audit verdict (verified, drift, shadowed, integrity state) as `scuta:` properties.
+- **Continuous monitoring, sender-only**: `scuta monitor install` schedules the audit with the OS scheduler (launchd agent on macOS, systemd user timer on Linux); no daemon or resident process. Each run atomically writes the JSON report to a local file, only when findings changed, optionally with a detached Ed25519 signature (`--sign-key`, keys from `scuta admin keygen`) so receivers can attribute posture claims to a machine. Scuta never uploads anything; point your own collector at the file ([docs/FLEET.md](docs/FLEET.md)).
 - **Policy enforcement**: Organizations can enforce version constraints via a remote `policy_url` — allowed/blocked versions, minimum Scuta version.
 - **Download cache**: verified assets are cached content-addressed by SHA-256 under `~/.scuta/cache`, so repeat installs skip the network without weakening verification — only checksum-verified assets are ever cached, and entries are re-hashed on every hit. Inspect with `scuta cache info`; disable with `scuta config set disable_download_cache true`.
 
@@ -320,6 +324,7 @@ template.
 Direction, not commitment (as of v1.x):
 
 - Audit adapters for more package managers (`go install`, brew, mise, and dpkg shipped via `doctor --audit --system`; npm, pipx, cargo under consideration), answering the same four questions Scuta answers for its own installs: where did it come from, does the binary still match, is there provenance, has it drifted
+- Windows support for `scuta monitor` (Task Scheduler)
 
 Non-goals: replacing your package manager, language-level dependencies (npm, pip, cargo), Windows package managers.
 

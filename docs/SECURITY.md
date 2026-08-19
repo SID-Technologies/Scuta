@@ -47,6 +47,7 @@ Lock files currently expire after 1 hour or when the holding process is no longe
 ## Recommendations
 
 - Run `scuta doctor` periodically to detect stale locks, missing binaries, and configuration issues; `scuta doctor --audit` additionally checks every managed binary for drift and surfaces recorded provenance
+- Schedule the audit with `scuta monitor install` (launchd / systemd user timer) and sign each report with a machine key (`--sign-key`), so posture claims shipped off the machine are attributable and tamper-evident; see docs/FLEET.md
 - In high-security environments, enable the fail-closed stack: `require_signature`, `require_signed_metadata`, and `provenance_verify require`
 - Use `registry_url=local` in high-security environments to disable remote registry fetching
 - Review installed tool sources with `scuta list` (shows whether each tool came from the remote, embedded, or local registry)

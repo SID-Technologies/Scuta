@@ -7,6 +7,7 @@ package audit
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -118,6 +119,22 @@ type PostureInput struct {
 	RequireSignedMetadata bool
 	PolicyConfigured      bool
 	ConfigURL             string
+}
+
+// StableHash returns a hex SHA-256 over the report with generation time
+// zeroed, so two runs that found the same things hash identically. Used by
+// --if-changed to skip rewriting (and re-signing) an unchanged report.
+func (r *Report) StableHash() (string, error) {
+	c := *r
+	c.GeneratedAt = time.Time{}
+
+	b, err := json.Marshal(&c)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // New builds a Report skeleton with environment metadata.

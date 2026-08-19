@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"runtime"
 	"strings"
 	"time"
@@ -129,46 +129,46 @@ func Installed(env Env) (bool, []string) {
 }
 
 func launchdPlistPath(env Env) string {
-	return filepath.Join(env.HomeDir, "Library", "LaunchAgents", launchdLabel+".plist")
+	return path.Join(env.HomeDir, "Library", "LaunchAgents", launchdLabel+".plist")
 }
 
 func systemdUnitDir(env Env) string {
-	return filepath.Join(env.HomeDir, ".config", "systemd", "user")
+	return path.Join(env.HomeDir, ".config", "systemd", "user")
 }
 
 func systemdTimerPath(env Env) string {
-	return filepath.Join(systemdUnitDir(env), systemdName+".timer")
+	return path.Join(systemdUnitDir(env), systemdName+".timer")
 }
 
 func systemdServicePath(env Env) string {
-	return filepath.Join(systemdUnitDir(env), systemdName+".service")
+	return path.Join(systemdUnitDir(env), systemdName+".service")
 }
 
 // installLaunchd writes a LaunchAgent plist and (re)loads it.
 func installLaunchd(env Env, opts Options) ([]string, error) {
 	plist := launchdPlist(env, opts)
-	path := launchdPlistPath(env)
+	plistPath := launchdPlistPath(env)
 
-	if err := env.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := env.MkdirAll(path.Dir(plistPath), 0o755); err != nil {
 		return nil, err
 	}
-	if err := env.WriteFile(path, []byte(plist), 0o644); err != nil {
+	if err := env.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
 		return nil, err
 	}
 
 	// Reload: bootout is expected to fail when the agent was not loaded.
 	_ = env.Run("launchctl", "bootout", "gui/"+env.UID+"/"+launchdLabel)
-	if err := env.Run("launchctl", "bootstrap", "gui/"+env.UID, path); err != nil {
-		return []string{path}, fmt.Errorf("plist written, but launchctl bootstrap failed (%w); load it manually: launchctl bootstrap gui/%s %s", err, env.UID, path)
+	if err := env.Run("launchctl", "bootstrap", "gui/"+env.UID, plistPath); err != nil {
+		return []string{plistPath}, fmt.Errorf("plist written, but launchctl bootstrap failed (%w); load it manually: launchctl bootstrap gui/%s %s", err, env.UID, plistPath)
 	}
 
-	return []string{path}, nil
+	return []string{plistPath}, nil
 }
 
 // launchdPlist renders the LaunchAgent definition. Arguments are XML-escaped;
 // audit output goes to ~/.scuta/monitor.log.
 func launchdPlist(env Env, opts Options) string {
-	logPath := filepath.Join(env.HomeDir, ".scuta", "monitor.log")
+	logPath := path.Join(env.HomeDir, ".scuta", "monitor.log")
 
 	var args strings.Builder
 	for _, a := range append([]string{env.Executable}, opts.AuditArgs...) {

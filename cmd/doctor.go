@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/sid-technologies/scuta/lib/audit"
@@ -15,7 +17,9 @@ import (
 	"github.com/sid-technologies/scuta/lib/output"
 	"github.com/sid-technologies/scuta/lib/path"
 	"github.com/sid-technologies/scuta/lib/registry"
+	"github.com/sid-technologies/scuta/lib/sbom"
 	"github.com/sid-technologies/scuta/lib/shellutil"
+	"github.com/sid-technologies/scuta/lib/sigverify"
 	"github.com/sid-technologies/scuta/lib/state"
 
 	"github.com/spf13/cobra"
@@ -41,7 +45,14 @@ CVEs, and machine posture (trust root, signed metadata, policy).
 Combine with the global --json flag to emit the audit report as JSON
 for fleet aggregation. Add --system to also audit packages installed by
 system package managers (go install, Homebrew, mise, dpkg): origin, version, and
-whether integrity can be verified.
+whether integrity can be verified. Add --sbom cyclonedx to emit the
+inventory as a CycloneDX 1.5 JSON document instead of the report.
+
+For recurring audits, --output writes the machine document (report, or
+SBOM with --sbom) atomically to a file, --sign-key writes a detached
+Ed25519 signature next to it (key from 'scuta admin keygen'), and
+--if-changed skips the write when findings are unchanged since the last
+run. See 'scuta monitor' to schedule this.
 
 Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
 		RunE: runDoctor,
@@ -50,6 +61,10 @@ Audit exit codes: 0 clean or warnings only, 1 critical findings.`,
 	cmd.Flags().Bool("skip-cve", false, "Skip CVE vulnerability check (for offline environments)")
 	cmd.Flags().Bool("audit", false, "Security audit: provenance, tamper detection, policy and posture")
 	cmd.Flags().Bool("system", false, "With --audit: also audit system package managers (go install, brew, mise, dpkg)")
+	cmd.Flags().String("sbom", "", "With --audit: emit an SBOM instead of the report (formats: cyclonedx)")
+	cmd.Flags().String("output", "", "With --audit: also write the machine document to this file (atomic)")
+	cmd.Flags().String("sign-key", "", "With --output: sign the written file (detached Ed25519 signature at <output>.sig)")
+	cmd.Flags().Bool("if-changed", false, "With --output: skip writing when findings are unchanged since the last run")
 
 	return cmd
 }
@@ -60,7 +75,15 @@ func init() {
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
-	if auditFlag, _ := cmd.Flags().GetBool("audit"); auditFlag {
+	auditFlag, _ := cmd.Flags().GetBool("audit")
+	sbomFormat, _ := cmd.Flags().GetString("sbom")
+	if sbomFormat != "" && !auditFlag {
+		return errors.New("--sbom requires --audit")
+	}
+	if err := checkAuditOutputFlags(cmd, auditFlag); err != nil {
+		return err
+	}
+	if auditFlag {
 		// The persistent --json flag switches the audit to machine output.
 		return runDoctorAudit(cmd, jsonFlag)
 	}
@@ -275,14 +298,11 @@ func runDoctorAudit(cmd *cobra.Command, jsonOut bool) error {
 
 	report.Finalize()
 
-	if jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(report); err != nil {
-			return err
-		}
-	} else {
-		printAuditReport(report)
+	if err := renderAudit(cmd, report, jsonOut); err != nil {
+		return err
+	}
+	if err := writeAuditArtifacts(cmd, scutaDir, report); err != nil {
+		return err
 	}
 
 	if report.Summary.Criticals > 0 {
@@ -292,6 +312,152 @@ func runDoctorAudit(cmd *cobra.Command, jsonOut bool) error {
 	}
 
 	return nil
+}
+
+// checkAuditOutputFlags validates the file-output flag combinations up
+// front, so misuse fails before any audit work runs.
+func checkAuditOutputFlags(cmd *cobra.Command, auditFlag bool) error {
+	outPath, _ := cmd.Flags().GetString("output")
+	signKey, _ := cmd.Flags().GetString("sign-key")
+	ifChanged, _ := cmd.Flags().GetBool("if-changed")
+
+	if outPath != "" && !auditFlag {
+		return errors.New("--output requires --audit")
+	}
+	if signKey != "" && outPath == "" {
+		return errors.New("--sign-key requires --output")
+	}
+	if ifChanged && outPath == "" {
+		return errors.New("--if-changed requires --output")
+	}
+	return nil
+}
+
+// writeAuditArtifacts handles --output: the machine document (report, or
+// SBOM with --sbom) written atomically, an optional detached signature, and
+// the --if-changed delta gate backed by a stable report hash in the scuta
+// directory.
+func writeAuditArtifacts(cmd *cobra.Command, scutaDir string, report *audit.Report) error {
+	outPath, _ := cmd.Flags().GetString("output")
+	if outPath == "" {
+		return nil
+	}
+
+	hash, err := report.StableHash()
+	if err != nil {
+		return err
+	}
+	hashPath := filepath.Join(scutaDir, "last-audit.hash")
+
+	if ifChanged, _ := cmd.Flags().GetBool("if-changed"); ifChanged {
+		prev, readErr := os.ReadFile(hashPath) //nolint:gosec // path is scuta-owned
+		if readErr == nil && string(prev) == hash {
+			if _, statErr := os.Stat(outPath); statErr == nil {
+				output.Dimmed("Findings unchanged since last run — not rewriting %s", outPath)
+				return nil
+			}
+		}
+	}
+
+	data, err := marshalAuditDocument(cmd, report)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(outPath, data, 0o644); err != nil {
+		return err
+	}
+	output.Success("Wrote audit document to %s", outPath)
+
+	if signKey, _ := cmd.Flags().GetString("sign-key"); signKey != "" {
+		keyPEM, err := os.ReadFile(signKey) //nolint:gosec // user-supplied path by design
+		if err != nil {
+			return fmt.Errorf("reading signing key: %w", err)
+		}
+		sig, err := sigverify.Sign(data, keyPEM)
+		if err != nil {
+			return fmt.Errorf("signing report: %w", err)
+		}
+		if err := writeFileAtomic(outPath+".sig", sig, 0o644); err != nil {
+			return err
+		}
+		output.Success("Wrote detached signature to %s.sig", outPath)
+	}
+
+	// Record the hash last, so a failed write retries next run.
+	return writeFileAtomic(hashPath, []byte(hash), 0o600)
+}
+
+// marshalAuditDocument returns the bytes --output writes: the SBOM when
+// --sbom is set, the JSON report otherwise.
+func marshalAuditDocument(cmd *cobra.Command, report *audit.Report) ([]byte, error) {
+	if sbomFormat, _ := cmd.Flags().GetString("sbom"); sbomFormat != "" {
+		doc, err := sbom.FromReport(report)
+		if err != nil {
+			return nil, err
+		}
+		return json.MarshalIndent(doc, "", "  ")
+	}
+	return json.MarshalIndent(report, "", "  ")
+}
+
+// writeFileAtomic writes via a temp file + rename in the destination
+// directory, so scheduled runs never leave a half-written report for a
+// collector to ship.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+
+	return nil
+}
+
+// renderAudit writes the audit in the requested representation: a CycloneDX
+// SBOM when --sbom is set, the JSON report with --json, or the human report.
+func renderAudit(cmd *cobra.Command, report *audit.Report, jsonOut bool) error {
+	sbomFormat, _ := cmd.Flags().GetString("sbom")
+	switch {
+	case sbomFormat != "":
+		if sbomFormat != "cyclonedx" {
+			return fmt.Errorf("unsupported SBOM format %q (formats: cyclonedx)", sbomFormat)
+		}
+		doc, err := sbom.FromReport(report)
+		if err != nil {
+			return err
+		}
+		return encodeJSON(doc)
+	case jsonOut:
+		return encodeJSON(report)
+	default:
+		printAuditReport(report)
+		return nil
+	}
+}
+
+// encodeJSON writes v to stdout as indented JSON.
+func encodeJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
 
 // appendCVEFindings attaches known-vulnerability findings per tool unless

@@ -3,3 +3,7 @@ tools:
     description: "Multi-cloud deployment CLI"
     repo: sid-technologies/Pilum
     homebrew: sid-technologies/tap/pilum
+  dictum:
+    description: "ASD-STE100 linter for AI-generated technical documents"
+    repo: sid-technologies/Dictum
+    homebrew: sid-technologies/dictum/dictum
